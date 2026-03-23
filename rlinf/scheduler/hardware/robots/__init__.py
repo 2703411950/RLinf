@@ -14,5 +14,13 @@
 
 from .franka import FrankaConfig, FrankaHWInfo
 from .xsquare import Turtle2Config, Turtle2HWInfo
+from .piper import PiperConfig, PiperHWInfo
 
-__all__ = ["FrankaConfig", "FrankaHWInfo", "Turtle2Config", "Turtle2HWInfo"]
+__all__ = [
+    "FrankaConfig",
+    "FrankaHWInfo",
+    "Turtle2Config",
+    "Turtle2HWInfo",
+    "PiperConfig",
+    "PiperHWInfo",
+]
