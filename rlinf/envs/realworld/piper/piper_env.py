@@ -259,9 +259,8 @@ class PiperEnv(gym.Env):
             CameraInfo(name=f"wrist_{i + 1}", serial_number=str(n))
             for i, n in enumerate(self.config.camera_serials)
         ]
-        from rlinf.envs.realworld.piper.piper_realsense_camera import PiperRealsenseCamera
         for info in camera_infos:
-            camera = PiperRealsenseCamera(info)
+            camera = Camera(info)
             if not self.config.is_dummy:
                 camera.open()
             self._cameras.append(camera)
@@ -276,23 +275,22 @@ class PiperEnv(gym.Env):
         display_frames = {}
         for camera in self._cameras:
             try:
-                # Custom camera implements aligned RGB+Depth output format via dict
-                cam_data = camera.get_frame()
-                frame = cam_data['color_img']  # we only use color in the standardized state dict
-                
-                # Assume standard resizing to observation space definitions
+                frame = camera.get_frame()
+
                 h, w, _ = frame.shape
                 crop_size = min(h, w)
                 start_x = (w - crop_size) // 2
                 start_y = (h - crop_size) // 2
-                cropped = frame[start_y:start_y+crop_size, start_x:start_x+crop_size]
-                
-                reshape_size = self.observation_space["frames"][camera._camera_info.name].shape[:2][::-1]
+                cropped = frame[start_y : start_y + crop_size, start_x : start_x + crop_size]
+
+                reshape_size = self.observation_space["frames"][
+                    camera._camera_info.name
+                ].shape[:2][::-1]
                 resized = cv2.resize(cropped, reshape_size)
-                
+
                 frames[camera._camera_info.name] = resized[..., ::-1]  # RGB to BGR
                 display_frames[camera._camera_info.name] = resized
-            except Exception as e:
+            except queue.Empty:
                 self._logger.warning(f"Camera {camera._camera_info.name} failure. Reconnecting...")
                 time.sleep(2)
                 self._close_cameras()
