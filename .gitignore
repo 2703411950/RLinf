@@ -22,3 +22,4 @@ PKG-INFO
 *.egg-info/
 RLCo-Example-Real-Data/
 RLinf-ResNet10-pretrained/
+datasets/

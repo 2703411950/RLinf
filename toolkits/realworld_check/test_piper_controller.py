@@ -23,7 +23,7 @@ from rlinf.envs.realworld.piper.piper_controller import PiperController
 
 def main():
     can_name = os.environ.get("PIPER_CAN_NAME", "can0")
-    controller = PiperController.launch_controller(can_name=can_name)
+    controller = PiperController.launch_controller(can_name=can_name, node_rank=1, env_idx=0, worker_rank=0)
 
     start_time = time.time()
     while not controller.is_robot_up().wait()[0]:

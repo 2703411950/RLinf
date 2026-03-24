@@ -1,6 +1,6 @@
 defaults:
-  - env/realworld_peg_insertion@env.train
-  - env/realworld_peg_insertion@env.eval
+  - env/realworld_piper_peg_insertion@env.train
+  - env/realworld_piper_peg_insertion@env.eval
   - model/cnn_policy@actor.model
   - training_backend/fsdp@actor.fsdp_config
   - override hydra/job_logging: stdout
@@ -55,7 +55,7 @@ cluster:
       hardware:
         type: Piper # 注意：当你以后写好 Piper 的代码后，这里要换成 Piper
         configs:
-          - can_name: "can0" # 【修改这里】填入 Franka 机械臂本身的 IP（如果你现在没有 Franka，只是想测试跑通代码，可以随便填一个内网能 ping 通的假 IP，并在配置文件中把 env.train.override_cfg.is_dummy 设为 True）
+          - can_name: "can0" # 如果只是想测试跑通代码，可以随便填一个内网能 ping 通的假 IP，并在配置文件中把 env.train.override_cfg.is_dummy 设为 True
             node_rank: 1
 
 
@@ -146,7 +146,7 @@ env:
     ignore_terminations: False
     total_num_envs: 1
     override_cfg:
-      is_dummy: False
+      is_dummy: True
       use_dense_reward: False
       target_ee_pose: [0.5, 0.0, 0.1, -3.14, 0.0, 0.0] # Replace with your target end-effector pose
       camera_serials: [213622075557]

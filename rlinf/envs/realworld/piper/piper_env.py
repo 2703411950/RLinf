@@ -17,7 +17,7 @@ import queue
 import time
 from dataclasses import dataclass, field
 from itertools import cycle
-from typing import Optional
+from typing import Any, Optional
 
 import cv2
 import gymnasium as gym

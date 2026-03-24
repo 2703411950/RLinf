@@ -92,9 +92,15 @@ class RealWorldEnv(gym.Env):
                 env = KeyboardRewardDoneMultiStageWrapper(env)
             elif self.cfg.keyboard_reward_wrapper == "single_stage":
                 env = KeyboardRewardDoneWrapper(env)
+        state_space = getattr(env.observation_space, "spaces", {}).get("state")
+        state_keys = getattr(state_space, "spaces", {}).keys() if state_space else []
+        has_tcp_pose = "tcp_pose" in state_keys
 
-        env = RelativeFrame(env)
-        env = Quat2EulerWrapper(env)
+        # RelativeFrame/Quat2Euler currently require tcp_pose (xyz + quat) in state.
+        # Keep compatibility with non-Cartesian robots (e.g. Piper joint-space envs).
+        if has_tcp_pose:
+            env = RelativeFrame(env)
+            env = Quat2EulerWrapper(env)
         return env
 
     @staticmethod
