@@ -1,0 +1,72 @@
+# Piper 真机数据采集（与 Franka 的 realworld_collect_data 对应）
+# 用法：
+#   bash examples/embodiment/collect_data.sh realworld_piper_collect_data
+#
+# 多机时：在机械臂所在节点上执行，并设置 cluster.node_groups 与 hardware（can_name、node_rank）。
+# 空间鼠标：需系统 libhidapi；若用主从臂、不用 SpaceMouse，将 env.eval.use_spacemouse 设为 False。
+
+defaults:
+  - env/realworld_piper_peg_insertion@env.eval
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env:
+      node_group: piper_robot
+      placement: 0
+  node_groups:
+    - label: piper_robot
+      node_ranks: 0
+      hardware:
+        type: Piper
+        configs:
+          # 【修改】与真实 Piper 控制机一致：CAN 口、节点 rank
+          - can_name: "can0"
+            node_rank: 0
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: null
+    project_name: rlinf
+    experiment_name: "collect-data-piper"
+    logger_backends: ["tensorboard"]
+  num_data_episodes: 20
+  record_task_description: false
+  # Piper 为 6 关节 + 夹爪；占位 step 与 ChunkStepResult 形状一致
+  action_dim: 7
+  # false：每结束一条轨迹（done）计 1 条，便于采集探索数据；true：仅成功回合计入 num_data_episodes（与原 Franka peg 行为一致）
+  count_success_episodes_only: false
+
+env:
+  group_name: "EnvGroup"
+  eval:
+    ignore_terminations: false
+    auto_reset: false
+    # 不使用 GripperCloseEnv 裁剪到 6 维，保留完整 7 维动作（含夹爪）
+    no_gripper: false
+    use_spacemouse: true
+    max_episode_steps: 100
+    override_cfg:
+      is_dummy: false
+      use_dense_reward: false
+      target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      camera_serials: ["213622075557"]
+  data_collection:
+    enabled: true
+    save_dir: ${runner.logger.log_path}/collected_data
+    export_format: "lerobot"
+    only_success: false
+    robot_type: "piper"
+    fps: 10
+
+seed: 1234

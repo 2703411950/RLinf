@@ -109,7 +109,7 @@ algorithm:
   replay_buffer:
     enable_cache: True
     cache_size: 200 # number of trajectories cached in memory
-    min_buffer_size: 2  # Minimum buffer size before training starts (in number of trajectories). If set too large, it will take a long time to start real-world training 
+    min_buffer_size: 1  # Lower warmup threshold for quick start verification
     sample_window_size: 200 # number of latest trajectories to sample from for replay buffer
     auto_save: False
 
@@ -118,9 +118,9 @@ algorithm:
     cache_size: 200 # number of trajectories cached in memory
     min_buffer_size: 1
     sample_window_size: 200 # number of latest trajectories to sample from for demo buffer
-    # load_path: "/data/cyy/RLinf/RLCo-Example-Real-Data/physical-intelligence/pick_and_place_real"
+    # load_path: "/data/cyy/RLinf/datasets/lerobot/lerobot_pusht"
     load_path: null
-    auto_save: False
+    auto_save: True
 
   target_update_freq: 1  # Frequency of target network updates
 

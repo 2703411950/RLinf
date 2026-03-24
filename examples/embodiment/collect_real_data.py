@@ -35,6 +35,10 @@ class DataCollector(Worker):
 
         self.cfg = cfg
         self.num_data_episodes = cfg.runner.num_data_episodes
+        self.action_dim = int(cfg.runner.get("action_dim", 6))
+        self.count_success_episodes_only = bool(
+            cfg.runner.get("count_success_episodes_only", True)
+        )
         self.total_cnt = 0
         self.env = RealWorldEnv(
             cfg.env.eval,
@@ -119,7 +123,7 @@ class DataCollector(Worker):
         current_obs_processed = self._process_obs(obs)
 
         while success_cnt < self.num_data_episodes:
-            action = np.zeros((1, 6))
+            action = np.zeros((1, self.action_dim))
             next_obs, reward, done, _, info = self.env.step(action)
 
             if "intervene_action" in info:
@@ -178,10 +182,13 @@ class DataCollector(Worker):
                 if isinstance(r_val, torch.Tensor):
                     r_val = r_val.item()
 
-                success_cnt += int(r_val)
+                if self.count_success_episodes_only:
+                    success_cnt += int(r_val)
+                else:
+                    success_cnt += 1
                 self.total_cnt += 1
                 self.log_info(
-                    f"Success: {r_val}. Total: {success_cnt}/{self.num_data_episodes}"
+                    f"Episode reward/signal: {r_val}. Total: {success_cnt}/{self.num_data_episodes}"
                 )
 
                 # Save Trajectory to the 'demos' directory
