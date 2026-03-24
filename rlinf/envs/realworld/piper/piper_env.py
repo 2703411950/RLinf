@@ -129,6 +129,8 @@ class PiperEnv(gym.Env):
             self.config.can_name = self.hardware_info.config.can_name
         if self.config.camera_serials is None:
             self.config.camera_serials = self.hardware_info.config.camera_serials
+        if self.config.camera_serials is not None:
+            self.config.camera_serials = [str(serial) for serial in self.config.camera_serials]
 
         self._controller = PiperController.launch_controller(
             can_name=self.config.can_name,
@@ -254,7 +256,7 @@ class PiperEnv(gym.Env):
         if self.config.camera_serials is None:
             return
         camera_infos = [
-            CameraInfo(name=f"wrist_{i + 1}", serial_number=n)
+            CameraInfo(name=f"wrist_{i + 1}", serial_number=str(n))
             for i, n in enumerate(self.config.camera_serials)
         ]
         from rlinf.envs.realworld.piper.piper_realsense_camera import PiperRealsenseCamera

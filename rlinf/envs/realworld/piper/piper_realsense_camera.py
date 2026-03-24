@@ -48,7 +48,7 @@ class PiperRealsenseCamera(Camera):
             raise ImportError(
                 "pyrealsense2 is not installed. Please install it using `pip install pyrealsense2`"
             )
-        self._logger.info(f"[RealSense] Connecting to: {self.serial_number} ...")
+        self._logger.info(f"[RealSense] Connecting to: {self._serial_number} ...")
         
         try:
             self.temporal_filter = rs.temporal_filter()
@@ -59,8 +59,8 @@ class PiperRealsenseCamera(Camera):
             self.pipeline = rs.pipeline()
             self.config = rs.config()
 
-            if self.serial_number:
-                self.config.enable_device(str(self.serial_number))
+            if self._serial_number:
+                self.config.enable_device(str(self._serial_number))
             
             # Using z16 and bgr8
             self.config.enable_stream(rs.stream.depth, self.width, self.height, rs.format.z16, self.fps)
@@ -74,12 +74,12 @@ class PiperRealsenseCamera(Camera):
             # --- Laser control logic ---
             if depth_sensor.supports(rs.option.emitter_enabled):
                 if self.laser_on:
-                    self._logger.info(f"   🔦 [{self.serial_number}] Laser ON")
+                    self._logger.info(f"   🔦 [{self._serial_number}] Laser ON")
                     depth_sensor.set_option(rs.option.emitter_enabled, 1.0)
                     if depth_sensor.supports(rs.option.laser_power):
                         depth_sensor.set_option(rs.option.laser_power, 360) 
                 else:
-                    self._logger.info(f"   🌑 [{self.serial_number}] Laser OFF")
+                    self._logger.info(f"   🌑 [{self._serial_number}] Laser OFF")
                     depth_sensor.set_option(rs.option.emitter_enabled, 0.0)
 
             # High Density preset
@@ -96,13 +96,13 @@ class PiperRealsenseCamera(Camera):
             self.align = rs.align(rs.stream.color)
             
             self.is_connected = True
-            self._logger.info(f"[RealSense] {self.serial_number} warming up...")
+            self._logger.info(f"[RealSense] {self._serial_number} warming up...")
             for _ in range(30): # Warm up
                 self.pipeline.wait_for_frames()
-            self._logger.info(f"[RealSense] {self.serial_number} ready.")
+            self._logger.info(f"[RealSense] {self._serial_number} ready.")
             
         except Exception as e:
-            self._logger.error(f"[RealSense] {self.serial_number} connection failed: {e}")
+            self._logger.error(f"[RealSense] {self._serial_number} connection failed: {e}")
             self.is_connected = False
             raise e
 
@@ -143,4 +143,4 @@ class PiperRealsenseCamera(Camera):
             except Exception: 
                 pass
             self.is_connected = False
-            self._logger.info(f"[RealSense] {self.serial_number} disconnected.")
+            self._logger.info(f"[RealSense] {self._serial_number} disconnected.")

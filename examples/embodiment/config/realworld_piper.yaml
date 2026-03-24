@@ -146,10 +146,11 @@ env:
     ignore_terminations: False
     total_num_envs: 1
     override_cfg:
-      is_dummy: True
+      is_dummy: False
       use_dense_reward: False
-      target_ee_pose: [0.5, 0.0, 0.1, -3.14, 0.0, 0.0] # Replace with your target end-effector pose
-      camera_serials: [213622075557]
+      target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # Piper uses joint-space target
+      reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      camera_serials: ["213622075557"]
       # camera_serial: [213622075557, 152122078363, 151222071331] # left right top
   
   eval:
@@ -183,7 +184,7 @@ actor:
 
   model:
     model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
-    state_dim: 19
+    state_dim: 13
     action_dim: 6
     num_q_heads: 10 # number of Q heads for critic, passed to policy module
 
