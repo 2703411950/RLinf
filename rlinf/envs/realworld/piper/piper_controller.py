@@ -139,8 +139,15 @@ class PiperController(Worker):
         """
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
         
-        while(not self.driver.EnablePiper()):
-            time.sleep(0.0005)
+        start_time = time.time()
+        while not self.driver.EnablePiper():
+            # Avoid hanging forever when arm cannot be enabled.
+            if time.time() - start_time > 3.0:
+                raise RuntimeError(
+                    "[Piper] EnablePiper timeout (>3s). Please check e-stop, motor enable state, "
+                    "and CAN communication on robot controller."
+                )
+            time.sleep(0.01)
             
         # Hardcoded 1000 threshold mapping to CAN standard values
         self.driver.GripperCtrl(0, 1000, 0x01, 0)

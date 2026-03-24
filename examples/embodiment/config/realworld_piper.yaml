@@ -145,6 +145,7 @@ env:
   train:
     ignore_terminations: False
     total_num_envs: 1
+    use_spacemouse: False
     override_cfg:
       is_dummy: False
       use_dense_reward: False
@@ -155,6 +156,7 @@ env:
   
   eval:
     total_num_envs: 1
+    use_spacemouse: False
 
 rollout:
   group_name: "RolloutGroup"
