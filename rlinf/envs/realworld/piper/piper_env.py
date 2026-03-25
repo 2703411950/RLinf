@@ -30,8 +30,17 @@ from rlinf.utils.logging import get_logger
 
 from .piper_robot_state import PiperRobotState
 
+# Piper 动作统一为 7 维（与 PiperController.move_arm 一致）：
+# - gym action_space 为 [-1, 1]^7，与 SAC/CNN（tanh）策略输出一致。
+# - step() 内将前 6 维从 [-1, 1] 线性映射到 joint_limit_min/max 内的绝对关节角（弧度），
+#   第 7 维为夹爪指令 [-1, 1]，交由 PiperController 映射到硬件（GripperCtrl）。
 # NOTE: Currently PiperEnv is configured for joint-space control since SDK naturally provides joint methods.
 # Integrating Cartesian space logic will require IK/FK module in future.
+
+PIPER_ACTION_DIM = 7
+PIPER_ARM_JOINT_DIM = 6
+
+
 @dataclass
 class PiperRobotConfig:
     can_name: Optional[str] = None
@@ -43,18 +52,13 @@ class PiperRobotConfig:
     step_frequency: float = 10.0
 
     target_joint_pose: np.ndarray = field(
-        default_factory=lambda: np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
     )
     reset_joint_pose: np.ndarray = field(
-        default_factory=lambda: np.zeros(6)
+        default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM)
     )
     max_num_steps: int = 100
-    reward_threshold: np.ndarray = field(default_factory=lambda: np.zeros(6))
-    
-    # action scale for joint deltas
-    action_scale: np.ndarray = field(
-        default_factory=lambda: np.ones(7) * 0.05
-    )
+    reward_threshold: np.ndarray = field(default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM))
     enable_random_reset: bool = False
 
     joint_limit_min: np.ndarray = field(default_factory=lambda: -np.ones(6) * 3.14)
@@ -67,7 +71,7 @@ class PiperRobotConfig:
 
 
 class PiperEnv(gym.Env):
-    """Piper robot arm environment."""
+    """Piper 机械臂环境：7 维动作（6 关节绝对角 + 1 夹爪），见模块顶部说明。"""
 
     def __init__(
         self,
@@ -87,7 +91,9 @@ class PiperEnv(gym.Env):
             self.env_worker_rank = worker_info.rank
 
         self._piper_state = PiperRobotState()
-        self._reset_pose = self.config.reset_joint_pose.copy()
+        self._reset_pose = np.asarray(
+            self.config.reset_joint_pose, dtype=np.float64
+        ).reshape(-1)[:PIPER_ARM_JOINT_DIM].copy()
         
         self._num_steps = 0
         self._success_hold_counter = 0
@@ -139,25 +145,30 @@ class PiperEnv(gym.Env):
             worker_rank=self.env_worker_rank,
         )
 
+    # TODO：range of gripper command need to be tested
+    def _normalized_action_to_command(self, action: np.ndarray) -> np.ndarray:
+        """Map policy action in [-1, 1]^7 to PiperController command (rad + gripper cmd)."""
+        a = np.asarray(action, dtype=np.float64).reshape(-1)
+        assert a.shape == (PIPER_ACTION_DIM,), (
+            f"Piper action must be shape ({PIPER_ACTION_DIM},), got {a.shape}"
+        )
+        a = np.clip(a, self.action_space.low, self.action_space.high)
+        j_lo = np.asarray(self.config.joint_limit_min, dtype=np.float64).reshape(-1)
+        j_hi = np.asarray(self.config.joint_limit_max, dtype=np.float64).reshape(-1)
+        t = (np.clip(a[:PIPER_ARM_JOINT_DIM], -1.0, 1.0) + 1.0) * 0.5
+        command = np.zeros(PIPER_ACTION_DIM, dtype=np.float64)
+        command[:PIPER_ARM_JOINT_DIM] = j_lo + t * (j_hi - j_lo)
+        command[PIPER_ARM_JOINT_DIM] = float(np.clip(a[PIPER_ARM_JOINT_DIM], -1.0, 1.0))
+        return command
+
     def step(self, action: np.ndarray):
-        """Take a step in the environment.
-        Input action should be 7D continuous [-1, 1], representing delta joint commands + gripper.
-        """
+        """执行一步。`action` 为 7 维，取值在 ``action_space``（默认 [-1,1]^7）内。"""
         start_time = time.time()
 
-        action = np.clip(action, self.action_space.low, self.action_space.high)
-        
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
+        command = self._normalized_action_to_command(action)
+
         if not self.config.is_dummy:
-            # 6 joints + 1 gripper
-            scaled_action = action * self.config.action_scale
-            next_joints = self._piper_state.arm_joint_position + scaled_action[:6]
-            next_joints = np.clip(next_joints, self.config.joint_limit_min, self.config.joint_limit_max)
-            
-            # Combine to command array
-            command = np.zeros(7)
-            command[:6] = next_joints
-            command[6] = scaled_action[6] # gripper
-            
             self._move_action(command)
         
         # Determine hold time
@@ -182,14 +193,35 @@ class PiperEnv(gym.Env):
     def num_steps(self):
         return self._num_steps
 
+    def _target_joint_pose_vec(self) -> np.ndarray:
+        t = np.asarray(self.config.target_joint_pose, dtype=np.float64).reshape(-1)
+        if len(t) >= PIPER_ARM_JOINT_DIM:
+            return t[:PIPER_ARM_JOINT_DIM].copy()
+        if len(t) == 0:
+            return np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
+        raise ValueError(
+            f"target_joint_pose must have at least {PIPER_ARM_JOINT_DIM} elements, got {len(t)}"
+        )
+
+    def _reward_threshold_vec(self) -> np.ndarray:
+        r = np.asarray(self.config.reward_threshold, dtype=np.float64).reshape(-1)
+        if r.size == 0:
+            return np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
+        if r.size >= PIPER_ARM_JOINT_DIM:
+            return r[:PIPER_ARM_JOINT_DIM].copy()
+        raise ValueError(
+            f"reward_threshold must have at least {PIPER_ARM_JOINT_DIM} elements, got {r.size}"
+        )
+
     def _calc_step_reward(self, observation: dict) -> float:
         """Compute task completion reward. Currently based on joint error for simplicity in template."""
         if not self.config.is_dummy:
-            # calculate distance in joint space
-            target_delta = np.abs(self._piper_state.arm_joint_position - self.config.target_joint_pose)
+            target = self._target_joint_pose_vec()
+            thr = self._reward_threshold_vec()
+            target_delta = np.abs(self._piper_state.arm_joint_position - target)
             
             # success threshold checks
-            is_in_target_zone = np.all(target_delta <= self.config.reward_threshold)
+            is_in_target_zone = np.all(target_delta <= thr)
 
             if is_in_target_zone:
                 self._success_hold_counter += 1
@@ -224,10 +256,10 @@ class PiperEnv(gym.Env):
         self._controller.reset_joint(reset_pose)
 
     def _init_action_obs_spaces(self):
-        # 6 joints + 1 gripper
+        # 7D：策略 [-1,1]^7；step 内映射为关节绝对角（弧度）+ 夹爪指令
         self.action_space = gym.spaces.Box(
-            np.ones(7, dtype=np.float32) * -1,
-            np.ones(7, dtype=np.float32),
+            np.ones(PIPER_ACTION_DIM, dtype=np.float32) * -1,
+            np.ones(PIPER_ACTION_DIM, dtype=np.float32),
         )
 
         self.observation_space = gym.spaces.Dict(
@@ -307,6 +339,10 @@ class PiperEnv(gym.Env):
             self._logger.debug(f"Dummy move: {action}")
 
     def _get_observation(self) -> dict:
+        self._logger.info(f"Running _get_observation")
+        self._logger.info(f"Getting frames: {self._get_camera_frames()}")
+        self._logger.info(f"Getting state: {self._piper_state}")
+
         if not self.config.is_dummy:
             frames = self._get_camera_frames()
             state = {

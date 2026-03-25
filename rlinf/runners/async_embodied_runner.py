@@ -134,6 +134,7 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         self._pending_rollout_weight_sync = (rollout_handle, actor_handle)
 
     def run(self):
+        self.logger.info(f"Running AsyncEmbodiedRunner with global step {self.global_step}")
         start_step = self.global_step
         start_time = time.time()
         self.update_rollout_weights(no_wait=self.sync_weight_no_wait)

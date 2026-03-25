@@ -164,7 +164,6 @@ class PiperController(Worker):
         joint_4 = round(action[4] * factor)
         joint_5 = round(action[5] * factor)
         
-        # Gripper mapping from [-1, 1] action format or specific threshold.
         # Using snippet's formula directly: `round(action[6]*70*1000)`
         joint_6 = round(action[6] * 70 * 1000)
         

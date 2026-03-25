@@ -35,7 +35,7 @@ class DataCollector(Worker):
 
         self.cfg = cfg
         self.num_data_episodes = cfg.runner.num_data_episodes
-        self.action_dim = int(cfg.runner.get("action_dim", 6))
+        self.action_dim = int(cfg.runner.get("action_dim", 7))
         self.count_success_episodes_only = bool(
             cfg.runner.get("count_success_episodes_only", True)
         )
@@ -132,7 +132,7 @@ class DataCollector(Worker):
             next_obs_processed = self._process_obs(next_obs)
 
             # --- Construct ChunkStepResult ---
-            # Prepare action tensor [1, 6]
+            # Prepare action tensor [1, action_dim] (e.g. Piper 7 = 6 joints + gripper)
             if isinstance(action, torch.Tensor):
                 action_tensor = action.float().cpu()
             else:

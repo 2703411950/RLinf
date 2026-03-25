@@ -16,7 +16,9 @@ else
 fi
 
 echo "Using Python at $(which python)"
-LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')" #/$(date +'%Y%m%d-%H:%M:%S')"
+# 多机 Ray：Env/DataCollector 在 worker 节点写盘；勿用仅 head 存在的路径（如 REPO_PATH=/data/...），
+# 否则 worker 上 mkdir 会 PermissionError: '/data'。默认写到当前用户 HOME；共享盘可设 RLINF_COLLECT_LOG_DIR。
+LOG_DIR="${RLINF_COLLECT_LOG_DIR:-${HOME}/RLinf/logs/$(date +'%Y%m%d-%H:%M:%S')}"
 MEGA_LOG_FILE="${LOG_DIR}/run_embodiment.log"
 mkdir -p "${LOG_DIR}"
 CMD="python ${SRC_FILE} --config-path ${EMBODIED_PATH}/config/ --config-name ${CONFIG_NAME} runner.logger.log_path=${LOG_DIR}"

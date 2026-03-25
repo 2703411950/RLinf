@@ -19,7 +19,10 @@ from gymnasium.spaces import Box
 
 class GripperCloseEnv(gym.ActionWrapper):
     """
-    Use this wrapper to task that requires the gripper to be closed
+    Use this wrapper to task that requires the gripper to be closed.
+
+    Expects a 7D underlying action space (e.g. Piper with full 7D control should set
+    ``no_gripper: false`` and avoid this wrapper).
     """
 
     def __init__(self, env):

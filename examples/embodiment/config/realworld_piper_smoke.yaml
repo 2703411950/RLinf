@@ -1,0 +1,34 @@
+defaults:
+  - realworld_piper
+  - _self_
+
+runner:
+  # Smoke test only: run a few optimization steps quickly.
+  max_steps: 20
+  val_check_interval: -1
+  save_interval: -1
+
+algorithm:
+  # Reduce one training loop workload.
+  update_epoch: 1
+  replay_buffer:
+    min_buffer_size: 1
+    sample_window_size: 32
+
+env:
+  train:
+    # Make one rollout cycle short so first trajectory arrives faster.
+    max_steps_per_rollout_epoch: 10
+    max_episode_steps: 20
+  eval:
+    max_steps_per_rollout_epoch: 10
+    max_episode_steps: 20
+
+actor:
+  # Smaller batch to shorten each actor.run_training().
+  micro_batch_size: 32
+  global_batch_size: 32
+
+rollout:
+  # Avoid torch.compile warmup overhead during link-check.
+  enable_torch_compile: false
