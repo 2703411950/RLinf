@@ -20,3 +20,9 @@ uv.lock
 rlinf/envs/maniskill/assets
 PKG-INFO
 *.egg-info/
+RLCo-Example-Real-Data/
+RLinf-ResNet10-pretrained/
+datasets/
+RoboTwin/
+.sii/
+launch.sh
