@@ -339,10 +339,6 @@ class PiperEnv(gym.Env):
             self._logger.debug(f"Dummy move: {action}")
 
     def _get_observation(self) -> dict:
-        
-        self._logger.info(f"Getting frames: {self._get_camera_frames().keys()}")
-        self._logger.info(f"Getting state: {self._piper_state}")
-
         if not self.config.is_dummy:
             frames = self._get_camera_frames()
             state = {
