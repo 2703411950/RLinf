@@ -123,9 +123,15 @@ class PiperDualConfig(HardwareConfig):
         assert isinstance(self.node_rank, int), (
             f"'node_rank' in piper dual config must be an integer. But got {type(self.node_rank)}."
         )
-        assert isinstance(self.can_names, list) and len(self.can_names) == 2, (
-            f"'can_names' must be a list with 2 entries, but got: {self.can_names}"
+        try:
+            can_names = list(self.can_names)
+        except TypeError as e:
+            raise AssertionError(
+                f"'can_names' must be an iterable with 2 entries, but got: {self.can_names}"
+            ) from e
+        assert len(can_names) == 2, (
+            f"'can_names' must contain exactly 2 entries, but got: {can_names}"
         )
-        self.can_names = [str(x) for x in self.can_names]
+        self.can_names = [str(x) for x in can_names]
         if self.camera_serials:
             self.camera_serials = list(self.camera_serials)
