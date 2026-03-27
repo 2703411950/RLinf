@@ -14,6 +14,7 @@
 
 
 import os
+import sys
 
 import hydra
 import numpy as np
@@ -38,6 +39,19 @@ class DataCollector(Worker):
         self.action_dim = int(cfg.runner.get("action_dim", 7))
         self.count_success_episodes_only = bool(
             cfg.runner.get("count_success_episodes_only", True)
+        )
+        self.pause_for_manual_reset = bool(cfg.runner.get("pause_for_manual_reset", False))
+        if os.environ.get("RLINF_COLLECT_SKIP_PAUSE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self.pause_for_manual_reset = False
+        self.pause_for_manual_reset_prompt = str(
+            cfg.runner.get(
+                "pause_for_manual_reset_prompt",
+                "[数据采集] 本段轨迹已保存。请手动复位场景（工件/台面等），完成后按 Enter 继续：将执行机械臂 reset 并开始下一段。",
+            )
         )
         self.total_cnt = 0
         self.env = RealWorldEnv(
@@ -108,6 +122,20 @@ class DataCollector(Worker):
                 ret_obs[key] = val.clone()
 
         return ret_obs
+
+    def _wait_for_manual_reset(self) -> None:
+        """Block until the operator finishes manual scene reset (stdin Enter)."""
+        if not self.pause_for_manual_reset:
+            return
+        msg = self.pause_for_manual_reset_prompt
+        self.log_info(msg)
+        print(msg, file=sys.stderr, flush=True)
+        try:
+            input()
+        except EOFError:
+            self.log_warning(
+                "stdin closed (non-interactive); skip manual reset pause."
+            )
 
     def run(self):
         obs, _ = self.env.reset()
@@ -208,7 +236,9 @@ class DataCollector(Worker):
                 trajectory.intervene_flags = torch.ones_like(trajectory.intervene_flags)
                 self.buffer.add_trajectories([trajectory])
 
-                # Reset for next episode
+                self._wait_for_manual_reset()
+
+                # Reset for next episode (robot returns to configured reset pose)
                 obs, _ = self.env.reset()
                 current_obs_processed = self._process_obs(obs)
                 current_rollout = EmbodiedRolloutResult(

@@ -53,6 +53,8 @@ runner:
   action_dim: 7
   # false：每结束一条轨迹（done）计 1 条，便于采集探索数据；true：仅成功回合计入 num_data_episodes（与原 Franka peg 行为一致）
   count_success_episodes_only: false
+  # 每条轨迹保存后暂停，人工复位台面/工件后按 Enter，再执行 env.reset() 开始下一条。无终端/自动化可设 false 或 export RLINF_COLLECT_SKIP_PAUSE=1
+  pause_for_manual_reset: true
 
 env:
   group_name: "EnvGroup"
@@ -75,6 +77,6 @@ env:
     export_format: "lerobot"
     only_success: false
     robot_type: "piper"
-    fps: 10
+    fps: 30
 
 seed: 1234
