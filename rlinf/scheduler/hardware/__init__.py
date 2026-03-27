@@ -20,7 +20,16 @@ from .hardware import (
     HardwareResource,
     NodeHardwareConfig,
 )
-from .robots import FrankaConfig, FrankaHWInfo, Turtle2Config, Turtle2HWInfo, PiperConfig, PiperHWInfo
+from .robots import (
+    FrankaConfig,
+    FrankaHWInfo,
+    PiperConfig,
+    PiperDualConfig,
+    PiperDualHWInfo,
+    PiperHWInfo,
+    Turtle2Config,
+    Turtle2HWInfo,
+)
 
 __all__ = [
     "AcceleratorUtil",
@@ -37,4 +46,6 @@ __all__ = [
     "Turtle2HWInfo",
     "PiperConfig",
     "PiperHWInfo",
+    "PiperDualConfig",
+    "PiperDualHWInfo",
 ]

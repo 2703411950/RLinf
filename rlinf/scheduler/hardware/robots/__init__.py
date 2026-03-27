@@ -15,6 +15,7 @@
 from .franka import FrankaConfig, FrankaHWInfo
 from .xsquare import Turtle2Config, Turtle2HWInfo
 from .piper import PiperConfig, PiperHWInfo
+from .piper_dual import PiperDualConfig, PiperDualHWInfo
 
 __all__ = [
     "FrankaConfig",
@@ -23,4 +24,6 @@ __all__ = [
     "Turtle2HWInfo",
     "PiperConfig",
     "PiperHWInfo",
+    "PiperDualConfig",
+    "PiperDualHWInfo",
 ]
