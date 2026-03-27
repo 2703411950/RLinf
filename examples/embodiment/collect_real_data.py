@@ -124,7 +124,9 @@ class DataCollector(Worker):
 
         while success_cnt < self.num_data_episodes:
             action = np.zeros((1, self.action_dim))
-            next_obs, reward, done, _, info = self.env.step(action)
+            # RealWorldEnv.step returns (obs, reward, terminations, truncations, infos)
+            next_obs, reward, terminations, truncations, info = self.env.step(action)
+            done = terminations | truncations
 
             if "intervene_action" in info:
                 action = info["intervene_action"]
@@ -149,19 +151,28 @@ class DataCollector(Worker):
             if reward_tensor.ndim == 1:
                 reward_tensor = reward_tensor.unsqueeze(1)
 
-            if isinstance(done, torch.Tensor):
-                done_tensor = done.bool().cpu()
+            if isinstance(terminations, torch.Tensor):
+                term_t = terminations.bool().cpu()
             else:
-                done_tensor = torch.tensor(done).bool()
-            if done_tensor.ndim == 1:
-                done_tensor = done_tensor.unsqueeze(1)
+                term_t = torch.tensor(terminations).bool()
+            if term_t.ndim == 1:
+                term_t = term_t.unsqueeze(1)
+
+            if isinstance(truncations, torch.Tensor):
+                trunc_t = truncations.bool().cpu()
+            else:
+                trunc_t = torch.tensor(truncations).bool()
+            if trunc_t.ndim == 1:
+                trunc_t = trunc_t.unsqueeze(1)
+
+            done_tensor = term_t | trunc_t
 
             step_result = ChunkStepResult(
                 actions=action_tensor,
                 rewards=reward_tensor,
                 dones=done_tensor,
-                terminations=done_tensor,
-                truncations=torch.zeros_like(done_tensor),
+                terminations=term_t,
+                truncations=trunc_t,
                 forward_inputs={"action": action_tensor},
             )
 
@@ -173,7 +184,8 @@ class DataCollector(Worker):
             obs = next_obs
             current_obs_processed = next_obs_processed
 
-            if done:
+            episode_done = bool(done_tensor.any()) if isinstance(done_tensor, torch.Tensor) else bool(done_tensor)
+            if episode_done:
                 r_val = (
                     reward[0]
                     if hasattr(reward, "__getitem__") and len(reward) > 0
