@@ -1,0 +1,45 @@
+defaults:
+  - realworld_piper
+  - env/realworld_piper_dual_peg_insertion@env.train
+  - env/realworld_piper_dual_peg_insertion@env.eval
+
+cluster:
+  # 示例：将 Env 放在连接双臂 Piper 的节点
+  node_groups:
+    - label: "5090d"
+      node_ranks: 0
+    - label: "3060"
+      node_ranks: 1
+      hardware:
+        type: Piper
+        configs:
+          - can_names: ["can0", "can1"]
+            node_rank: 1
+
+algorithm:
+  entropy_tuning:
+    target_entropy: -14
+
+env:
+  train:
+    no_gripper: false
+    override_cfg:
+      # 双臂目标关节角，shape=(2,6)
+      target_joint_pose:
+        - [0.5, 0.0, 0.1, -3.14, 0.0, 0.0]
+        - [0.5, 0.0, 0.1, -3.14, 0.0, 0.0]
+      reward_threshold:
+        - [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+        - [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      # 双臂 CAN，优先从 override_cfg 读取；不依赖 hardware.config.can_name
+      can_names: ["can0", "can1"]
+      # 可放双腕相机（示例）
+      camera_serials: ["213622075557", "152122078363"]
+
+  eval:
+    no_gripper: false
+
+actor:
+  model:
+    state_dim: 26  # 12 joint pos + 12 joint vel + 2 gripper pos
+    action_dim: 14 # [left 7, right 7]
