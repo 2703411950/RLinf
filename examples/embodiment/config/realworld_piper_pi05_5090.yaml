@@ -1,0 +1,204 @@
+defaults:
+  - env/realworld_piper_peg_insertion@env.train
+  - env/realworld_piper_peg_insertion@env.eval
+  - model/pi0_5@actor.model
+  # - model/cnn_policy@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+  
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor: 
+      node_group: "5090d" # 训练网络放在 5090d 上
+      placement: 0 
+    env:
+      node_group: "5090d"
+      placement: 0 
+    rollout:
+      node_group: "5090d" # 推理也放在 5090d 上，利用强算力
+      placement: 0 
+
+  node_groups:
+    - label: "5090d" 
+      node_ranks: 0 # 对应你在终端设置的 RLINF_NODE_RANK=0
+      hardware:
+        type: Piper # 注意：当你以后写好 Piper 的代码后，这里要换成 Piper
+        configs:
+          - can_name: "can1" # 如果只是想测试跑通代码，可以随便填一个内网能 ping 通的假 IP，并在配置文件中把 env.train.override_cfg.is_dummy 设为 True
+            node_rank: 0
+
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "sac_mlp"
+    logger_backends: ["tensorboard"] # wandb, swanlab
+
+  max_epochs: 8000
+  max_steps: -1
+
+  only_eval: False
+  val_check_interval: -1
+  save_interval: -1
+
+  resume_dir: null # Optional: path to a saved checkpoint directory, such as 'checkpoints/global_step_10'. If not None, it will be used to resume training.
+  ckpt_path: null  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
+
+algorithm:
+  update_epoch: 8
+  group_size: 1
+  agg_q: min # or mean
+  actor_agg_q: mean
+  enable_drq: False
+
+  backup_entropy: False
+  critic_subsample_size: 2
+  eval_rollout_epoch: 1
+
+  adv_type: embodied_sac
+  loss_type: embodied_sac
+  loss_agg_func: "token-mean"
+  
+  bootstrap_type: standard
+  gamma: 0.96
+  tau: 0.005  # Soft update coefficient for target networks
+  entropy_tuning:
+    alpha_type: softplus # choose from ["softplus", "exp", "fixed_alpha"], set to "softplus" or "exp" to enable automatic entropy tuning
+    initial_alpha: 0.01  # Initial temperature value
+    target_entropy: -7  # Target entropy (~ -action_dim for 7D Piper)
+    optim:
+      lr: 3.0e-4  # Learning rate for temperature parameter
+      lr_scheduler: torch_constant
+      clip_grad: 10.0
+  
+  critic_actor_ratio: 4
+  # Replay buffer settings
+  replay_buffer:
+    enable_cache: True
+    cache_size: 200 # number of trajectories cached in memory
+    min_buffer_size: 1  # Lower warmup threshold for quick start verification
+    sample_window_size: 200 # number of latest trajectories to sample from for replay buffer
+    auto_save: False
+
+  demo_buffer:
+    enable_cache: True
+    cache_size: 200 # number of trajectories cached in memory
+    min_buffer_size: 1
+    sample_window_size: 200 # number of latest trajectories to sample from for demo buffer
+    # load_path: "/data/cyy/RLinf/datasets/lerobot/lerobot_pusht"
+    load_path: null
+    auto_save: True
+
+  target_update_freq: 1  # Frequency of target network updates
+
+  # params for rollout
+  sampling_params:
+    do_sample: True
+    temperature_train: 1.0
+    temperature_eval: 0.6
+    top_k: 50
+    top_p: 1.0
+    repetition_penalty: 1.0
+
+  # length argument for autoregressive sampling
+  length_params:
+    max_new_token: 7
+    max_length: 1024
+    min_length: 1
+
+env:
+  group_name: "EnvGroup"
+
+  train:
+    ignore_terminations: False
+    total_num_envs: 1
+    use_spacemouse: False
+    # Piper 动作为 7 维（6 关节 + 夹爪）；勿用 GripperCloseEnv（其策略空间为 6 维），否则与 actor.action_dim=7 冲突
+    no_gripper: false
+    override_cfg:
+      is_dummy: False
+      use_dense_reward: False
+      # 仅 6 个关节目标（弧度）；奖励与 gripper 无关。策略仍为 7 维（6 关节 + 夹爪）。
+      # target_joint_pose: [0.5, 0.0, 0.1, -3.14, 0.0, 0.0]
+      target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+      # reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      camera_serials: ["152122078363"]
+      # camera_serials: [213622075557, 152122078363, 151222071331] # left right top
+  
+  eval:
+    total_num_envs: 1
+    use_spacemouse: False
+    no_gripper: false
+
+rollout:
+  group_name: "RolloutGroup"
+  backend: "huggingface"
+  enable_offload: False
+  pipeline_stage_num: 1
+  sync_weight_nccl_max_ctas: 32 # Max CTAs (Compute Thread Array, the compute resource of GPUs) for sync weight communication. Higher values consume more GPU resources, and thus sync weight is faster but could affect rollout speed in async mode. Positive integer 1 to 32. Default 32.
+
+  collect_transitions: True
+  collect_prev_infos: False
+
+  model:
+    # model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
+    model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
+    precision: ${actor.model.precision}
+    num_q_heads: 10
+
+  enable_torch_compile: True
+  enable_cuda_graph: False
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+
+  micro_batch_size: 256  # Smaller batch_size to accelerate training in real world
+  global_batch_size: 256  # Smaller batch_size to accelerate training in real world
+  seed: 1234
+  enable_offload: False
+
+  model:
+    model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
+    # model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
+    
+    state_dim: 13
+    action_dim: 7
+    num_q_heads: 10 # number of Q heads for critic, passed to policy module
+
+  optim:
+    clip_grad: 10.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+
+  critic_optim:
+    clip_grad: 10.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+
+  # Override the default values in training_backend/fsdp
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "no_shard"
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: False
+
+critic:
+  use_critic_model: False
