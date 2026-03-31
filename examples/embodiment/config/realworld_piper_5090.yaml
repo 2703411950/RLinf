@@ -1,9 +1,11 @@
 defaults:
   - env/realworld_piper_peg_insertion@env.train
   - env/realworld_piper_peg_insertion@env.eval
+  # - model/pi0_5@actor.model
   - model/cnn_policy@actor.model
   - training_backend/fsdp@actor.fsdp_config
   - override hydra/job_logging: stdout
+  
 
 hydra:
   run:
@@ -12,14 +14,15 @@ hydra:
   searchpath:
     - file://${oc.env:EMBODIED_PATH}/config/
 
+
 cluster:
-  num_nodes: 2
+  num_nodes: 1
   component_placement:
     actor: 
       node_group: "5090d" # 训练网络放在 5090d 上
       placement: 0 
     env:
-      node_group: "3060"  # 环境交互放在 3060 上
+      node_group: "5090d"
       placement: 0 
     rollout:
       node_group: "5090d" # 推理也放在 5090d 上，利用强算力
@@ -28,13 +31,11 @@ cluster:
   node_groups:
     - label: "5090d" 
       node_ranks: 0 # 对应你在终端设置的 RLINF_NODE_RANK=0
-    - label: "3060"
-      node_ranks: 1 # 对应你在终端设置的 RLINF_NODE_RANK=1
       hardware:
         type: Piper # 注意：当你以后写好 Piper 的代码后，这里要换成 Piper
         configs:
           - can_name: "can1" # 如果只是想测试跑通代码，可以随便填一个内网能 ping 通的假 IP，并在配置文件中把 env.train.override_cfg.is_dummy 设为 True
-            node_rank: 1
+            node_rank: 0
 
 
 runner:
@@ -152,8 +153,8 @@ rollout:
   collect_prev_infos: False
 
   model:
-    # model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
     model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
+    # model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
     precision: ${actor.model.precision}
     num_q_heads: 10
 
@@ -170,7 +171,9 @@ actor:
   enable_offload: False
 
   model:
+    # model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
     model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
+    
     state_dim: 13
     action_dim: 7
     num_q_heads: 10 # number of Q heads for critic, passed to policy module

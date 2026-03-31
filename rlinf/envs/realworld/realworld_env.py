@@ -85,9 +85,13 @@ class RealWorldEnv(gym.Env):
         )
         if self.cfg.get("no_gripper", True):
             env = GripperCloseEnv(env)
-        if not env.config.is_dummy and self.cfg.get("use_spacemouse", True):
+        # if not env.config.is_dummy and self.cfg.get("use_spacemouse", True):
+        base_env = getattr(env, "unwrapped", env)
+        is_dummy = getattr(getattr(base_env, "config", None), "is_dummy", False)
+        if not is_dummy and self.cfg.get("use_spacemouse", True):
             env = SpacemouseIntervention(env)
-        if not env.config.is_dummy and self.cfg.get("keyboard_reward_wrapper", None):
+        # if not env.config.is_dummy and self.cfg.get("keyboard_reward_wrapper", None):
+        if not is_dummy and self.cfg.get("keyboard_reward_wrapper", None):
             if self.cfg.keyboard_reward_wrapper == "multi_stage":
                 env = KeyboardRewardDoneMultiStageWrapper(env)
             elif self.cfg.keyboard_reward_wrapper == "single_stage":

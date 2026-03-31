@@ -22,8 +22,8 @@ from rlinf.envs.realworld.piper.piper_controller import PiperController
 
 
 def main():
-    can_name = os.environ.get("PIPER_CAN_NAME", "can0")
-    controller = PiperController.launch_controller(can_name=can_name, node_rank=1, env_idx=0, worker_rank=0)
+    can_name = os.environ.get("PIPER_CAN_NAME", "can1")
+    controller = PiperController.launch_controller(can_name=can_name, node_rank=0, env_idx=0, worker_rank=0)
 
     start_time = time.time()
     while not controller.is_robot_up().wait()[0]:
@@ -47,6 +47,8 @@ def main():
             elif cmd_str == "getstate":
                 state = controller.get_state().wait()[0]
                 print(state.to_dict())
+            elif cmd_str == "reset":
+                controller.reset_joint([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]).wait()
             else:
                 print(f"Unknown cmd: {cmd_str}")
         except KeyboardInterrupt:

@@ -23,3 +23,5 @@ PKG-INFO
 RLCo-Example-Real-Data/
 RLinf-ResNet10-pretrained/
 datasets/
+ckpts/
+openpi/
