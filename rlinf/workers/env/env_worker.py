@@ -13,8 +13,17 @@
 # limitations under the License.
 
 import asyncio
+import os
 from collections import defaultdict
 from typing import Any, Literal
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["OMP_NUM_THREADS"] = "1"
+print("OMP_NUM_THREADS setup")
+
+os.environ["SAPIEN_NO_DISPLAY"] = "1"
+os.environ["SAPIEN_EGL_AVAILABLE"] = "1"
+os.environ["SAPIEN_VULKAN_ICD"] = "nvidia"
 
 import numpy as np
 import torch
