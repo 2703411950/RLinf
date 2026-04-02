@@ -57,7 +57,8 @@ runner:
   ckpt_path: null  # Optional: path to a .pt checkpoint. If not None, it will be loaded after the model is instantiated (for evaluation).
 
 algorithm:
-  update_epoch: 8
+  # 单卡 24GB：Pi0.5 + 同进程 Rollout 各持一份权重，显存极紧；降低每轮重复更新次数
+  update_epoch: 2
   group_size: 1
   agg_q: min # or mean
   actor_agg_q: mean
@@ -83,7 +84,7 @@ algorithm:
       lr_scheduler: torch_constant
       clip_grad: 10.0
   
-  critic_actor_ratio: 4
+  critic_actor_ratio: 2
   # Replay buffer settings
   replay_buffer:
     enable_cache: True
@@ -156,34 +157,44 @@ rollout:
     # model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
     model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
     precision: ${actor.model.precision}
-    num_q_heads: 10
+    # 与 actor.model.num_q_heads 一致即可（Rollout 实际用 deepcopy(actor.model)）
+    num_q_heads: 6
 
-  enable_torch_compile: True
+  # enable_torch_compile: True
+  enable_torch_compile: False
   enable_cuda_graph: False
 
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
 
-  micro_batch_size: 256  # Smaller batch_size to accelerate training in real world
-  global_batch_size: 256  # Smaller batch_size to accelerate training in real world
+  micro_batch_size: 1  # Smaller batch_size to accelerate training in real world
+  global_batch_size: 16  # Smaller batch_size to accelerate training in real world
   seed: 1234
   enable_offload: False
 
   model:
     model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
     # model_path: "/data/cyy/RLinf/RLinf-ResNet10-pretrained" # https://huggingface.co/RLinf/RLinf-ResNet10-pretrained
-    
+    # 缩短 action chunk / 扩散步数，直接降低 Pi 前向序列长度与算子规模
+    num_action_chunks: 5
+    num_steps: 3
+
     state_dim: 13
     action_dim: 7
-    num_q_heads: 10 # number of Q heads for critic, passed to policy module
+    num_q_heads: 6 # number of Q heads for critic, passed to policy module
 
     # SAC(FSDP) 需要 OpenPI 的 DSRL critic 组件（critic encoders + q_head）
     # 否则 build_optimizers 会在 critic 参数过滤阶段匹配不到任何可训练参数。
     openpi:
       use_dsrl: True
       dsrl_state_dim: 13
-      dsrl_num_q_heads: 10
+      # 单相机时只喂一张图，减少 vision 侧激活
+      num_images_in_input: 1
+      dsrl_num_q_heads: 6
+      dsrl_image_latent_dim: 48
+      dsrl_state_latent_dim: 48
+      dsrl_hidden_dims: [96, 96, 96]
 
   optim:
     clip_grad: 10.0

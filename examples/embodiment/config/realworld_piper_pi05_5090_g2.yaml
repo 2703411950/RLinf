@@ -1,0 +1,228 @@
+# Piper 真机 + Pi0.5 SAC(DSRL)：5090d 上只跑 Env（机械臂/CAN/相机），g2（8×4090-24G）上跑 Actor+Rollout
+#
+# 前置条件（与官方多机 Ray 一致）：
+# 1) 两台机器代码路径、conda/venv、checkpoint 路径一致；g2 能访问同一 model_path。
+# 2) 在 **每台** 机器上 `ray start` **之前** 设置 `RLINF_NODE_RANK`（0 与 1 不重复）。
+#    建议在 5090d 上作为 Ray head 启动，在 g2 上 `ray start --address=<head_ip>:6379` 加入集群。
+# 3) 多机 NCCL 通信：按需设置 `RLINF_COMM_NET_DEVICES` 或 `NCCL_SOCKET_IFNAME`（见下方 node_groups 注释）。
+# 4) 本配置假设：cluster node 0 = 5090d（Piper），cluster node 1 = g2（8 GPU）。若你的 rank 对调，请同步改 node_ranks。
+#
+# 用法示例（在 5090d 上，已启动 Ray 集群后）：
+#   export EMBODIED_PATH=/data/cyy/RLinf/examples/embodiment
+#   bash examples/embodiment/run_embodiment.sh realworld_piper_pi05_5090_g2
+# 或：
+#   python examples/embodiment/train_embodied_agent.py --config-name realworld_piper_pi05_5090_g2
+
+defaults:
+  - env/realworld_piper_peg_insertion@env.train
+  - env/realworld_piper_peg_insertion@env.eval
+  - model/pi0_5@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 2
+  component_placement:
+    # 机械臂、CAN、相机只在 5090d；Env 必须调度到 Piper 所在 node
+    env:
+      node_group: piper5090
+      placement: 0
+    # g2 上 4 卡 FSDP；可按需改为 0-7（8 卡）并同步调大 global_batch_size
+    actor:
+      node_group: g2_4090
+      placement: 0-3
+    # 单独占一张卡做 HF 推理，避免与 actor rank0 争用同 GPU；仍 OOM 时可改为 placement: 4-7 等多卡 rollout（需框架支持）
+    rollout:
+      node_group: g2_4090
+      # 与 realworld_charger 等示例一致，用区间表示单卡
+      placement: 4-4
+
+  node_groups:
+    - label: piper5090
+      node_ranks: 0
+      hardware:
+        type: Piper
+        configs:
+          - can_name: "can0"
+            node_rank: 0
+    - label: g2_4090
+      node_ranks: 1
+      # g2 无 Piper 硬件；不写 hardware 则按节点上 GPU 自动检测
+      # 若多机 NCCL 选错网卡，可取消注释并按实际网卡名修改：
+      # env_configs:
+      #   - node_ranks: 1
+      #     env_vars:
+      #       - NCCL_SOCKET_IFNAME: "eth0"
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "sac_pi05_piper_g2"
+    logger_backends: ["tensorboard"]
+
+  max_epochs: 8000
+  max_steps: -1
+
+  only_eval: False
+  val_check_interval: -1
+  save_interval: -1
+
+  resume_dir: null
+  ckpt_path: null
+
+algorithm:
+  update_epoch: 2
+  group_size: 1
+  agg_q: min
+  actor_agg_q: mean
+  enable_drq: False
+
+  backup_entropy: False
+  critic_subsample_size: 2
+  eval_rollout_epoch: 1
+
+  adv_type: embodied_sac
+  loss_type: embodied_sac
+  loss_agg_func: "token-mean"
+
+  bootstrap_type: standard
+  gamma: 0.96
+  tau: 0.005
+  entropy_tuning:
+    alpha_type: softplus
+    initial_alpha: 0.01
+    target_entropy: -7
+    optim:
+      lr: 3.0e-4
+      lr_scheduler: torch_constant
+      clip_grad: 10.0
+
+  critic_actor_ratio: 2
+  replay_buffer:
+    enable_cache: True
+    cache_size: 200
+    min_buffer_size: 1
+    sample_window_size: 200
+    auto_save: False
+
+  demo_buffer:
+    enable_cache: True
+    cache_size: 200
+    min_buffer_size: 1
+    sample_window_size: 200
+    load_path: null
+    auto_save: True
+
+  target_update_freq: 1
+
+  sampling_params:
+    do_sample: True
+    temperature_train: 1.0
+    temperature_eval: 0.6
+    top_k: 50
+    top_p: 1.0
+    repetition_penalty: 1.0
+
+  length_params:
+    max_new_token: 7
+    max_length: 1024
+    min_length: 1
+
+env:
+  group_name: "EnvGroup"
+
+  train:
+    ignore_terminations: False
+    total_num_envs: 1
+    use_spacemouse: False
+    no_gripper: false
+    override_cfg:
+      is_dummy: False
+      use_dense_reward: False
+      target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+      camera_serials: ["213622075557"]
+
+  eval:
+    total_num_envs: 1
+    use_spacemouse: False
+    no_gripper: false
+
+rollout:
+  group_name: "RolloutGroup"
+  backend: "huggingface"
+  enable_offload: False
+  pipeline_stage_num: 1
+  sync_weight_nccl_max_ctas: 32
+
+  collect_transitions: True
+  collect_prev_infos: False
+
+  model:
+    model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle"
+    precision: ${actor.model.precision}
+    num_q_heads: 6
+
+  enable_torch_compile: False
+  enable_cuda_graph: False
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+
+  # actor world_size=4（placement 0-3）时：global_batch_size 需能被 micro_batch_size * world_size 整除
+  micro_batch_size: 1
+  global_batch_size: 16
+  seed: 1234
+  enable_offload: False
+
+  model:
+    model_path: "/data/cyy/RLinf/ckpts/RLinf-Pi05-RoboTwin-PPO-adjust_bottle"
+    num_action_chunks: 5
+    num_steps: 3
+
+    state_dim: 13
+    action_dim: 7
+    num_q_heads: 6
+
+    openpi:
+      use_dsrl: True
+      dsrl_state_dim: 13
+      num_images_in_input: 1
+      dsrl_num_q_heads: 6
+      dsrl_image_latent_dim: 48
+      dsrl_state_latent_dim: 48
+      dsrl_hidden_dims: [96, 96, 96]
+
+  optim:
+    clip_grad: 10.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+
+  critic_optim:
+    clip_grad: 10.0
+    lr: 3e-4
+    lr_scheduler: torch_constant
+
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "no_shard"
+    use_orig_params: True
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: False
+
+critic:
+  use_critic_model: False
