@@ -141,12 +141,12 @@ class PiperController(Worker):
         
         start_time = time.time()
         while not self.driver.EnablePiper():
-            # Avoid hanging forever when arm cannot be enabled.
-            if time.time() - start_time > 3.0:
-                raise RuntimeError(
-                    "[Piper] EnablePiper timeout (>3s). Please check e-stop, motor enable state, "
-                    "and CAN communication on robot controller."
-                )
+            # # Avoid hanging forever when arm cannot be enabled.
+            # if time.time() - start_time > 3.0:
+            #     raise RuntimeError(
+            #         "[Piper] EnablePiper timeout (>3s). Please check e-stop, motor enable state, "
+            #         "and CAN communication on robot controller."
+            #     )
             time.sleep(0.01)
             
         # Hardcoded 1000 threshold mapping to CAN standard values

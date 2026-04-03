@@ -188,6 +188,21 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             ),
         )
 
+        # Optional: load an offline replay buffer checkpoint for offline training.
+        # This is intentionally best-effort and only triggers when load_path is set.
+        replay_load_path = self.cfg.algorithm.replay_buffer.get("load_path", None)
+        if replay_load_path is not None:
+            self.log_info(
+                f"Loading offline replay buffer from {replay_load_path} "
+                f"(rank={self._rank}, world_size={self._world_size})"
+            )
+            self.replay_buffer.load_checkpoint(
+                replay_load_path,
+                is_distributed=True,
+                local_rank=self._rank,
+                world_size=self._world_size,
+            )
+
         min_demo_buffer_size = 0
         if self.cfg.algorithm.get("demo_buffer", None) is not None:
             auto_save_path = self.cfg.algorithm.demo_buffer.get("auto_save_path", None)

@@ -34,7 +34,7 @@ cluster:
       hardware:
         type: Piper # 注意：当你以后写好 Piper 的代码后，这里要换成 Piper
         configs:
-          - can_name: "can1" # 如果只是想测试跑通代码，可以随便填一个内网能 ping 通的假 IP，并在配置文件中把 env.train.override_cfg.is_dummy 设为 True
+          - can_name: "can0" # 如果只是想测试跑通代码，可以随便填一个内网能 ping 通的假 IP，并在配置文件中把 env.train.override_cfg.is_dummy 设为 True
             node_rank: 0
 
 
