@@ -24,6 +24,33 @@ from rlinf.utils.logging import get_logger
 
 from .piper_robot_state import PiperRobotState
 
+# LeRobot dataset stats for action QUANTILES unnormalization.
+# ckpt: /data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_20000
+PIPER_ACTION_Q01 = np.array(
+    [
+        -1.8593752725232902,
+        -2.191238896575465,
+        -70.62271084360333,
+        -23.04660932651632,
+        -65.60478651349973,
+        -46.903707102920585,
+        0.29157288363288114,
+    ],
+    dtype=np.float64,
+)
+PIPER_ACTION_Q99 = np.array(
+    [
+        41.94675871279014,
+        111.5306715349089,
+        -23.412755012758318,
+        20.371404608885257,
+        70.39810720779134,
+        8.672984993769324,
+        88.8588513303149,
+    ],
+    dtype=np.float64,
+)
+
 def _enum_to_name(x: Any) -> Any:
     return getattr(x, "name", x)
 
@@ -92,6 +119,13 @@ class PiperController(Worker):
 
         self.log_info(f"[Piper] Connected: {self.driver.get_connect_status()}, isOk: {self.driver.isOk()}, CAN FPS: {self.driver.GetCanFps()}")
 
+    def _unnormalize_action_quantiles(self, normalized_action: np.ndarray) -> np.ndarray:
+        """Unnormalize action from [-1, 1] with LeRobot QUANTILES stats."""
+        denom = PIPER_ACTION_Q99 - PIPER_ACTION_Q01
+        # Keep behavior stable when any channel has identical quantiles.
+        denom = np.where(np.abs(denom) < 1e-8, 1e-8, denom)
+        return (normalized_action + 1.0) * denom / 2.0 + PIPER_ACTION_Q01
+
     def is_robot_up(self) -> bool:
         """Check if connection is ready."""
         return self._connected and self.driver.isOk()
@@ -138,6 +172,10 @@ class PiperController(Worker):
         Units for joints are radians, and gripper is a continuous value [0, 1].
         """
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
+        action = np.asarray(action, dtype=np.float64)
+        action = self._unnormalize_action_quantiles(action)
+
+        self.log_info(f"Piper Move: args={action}")
         
         start_time = time.time()
         while not self.driver.EnablePiper():
@@ -168,7 +206,6 @@ class PiperController(Worker):
         joint_6 = round(action[6] * 70 * 1000)
         
         self.driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-        self.log_info(f"Piper Move: args={[joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]}")
         # self.driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
         self.driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
         

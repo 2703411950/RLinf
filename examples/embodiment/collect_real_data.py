@@ -12,21 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 
+import copy
 import os
 import sys
-
 import hydra
 import numpy as np
 import torch
+from omegaconf import DictConfig, open_dict
 from tqdm import tqdm
 
+from rlinf.config import SupportedModel
 from rlinf.data.embodied_io_struct import (
     ChunkStepResult,
     EmbodiedRolloutResult,
 )
 from rlinf.data.replay_buffer import TrajectoryReplayBuffer
+from rlinf.envs.action_utils import prepare_actions
 from rlinf.envs.realworld.realworld_env import RealWorldEnv
+from rlinf.models import get_model
+from rlinf.models.embodiment.base_policy import BasePolicy
 from rlinf.scheduler import Cluster, ComponentPlacement, Worker
 
 
@@ -101,10 +107,104 @@ class DataCollector(Worker):
             trajectory_format="pt",
         )
 
+        self.use_policy_inference = bool(
+            getattr(self.cfg.runner, "use_policy_inference", False)
+        )
+        self._policy: BasePolicy | None = None
+        self._num_action_chunks = 1
+        if self.use_policy_inference:
+            self._init_policy_model()
+
+    def _init_policy_model(self) -> None:
+        """Load rollout policy the same way as ``MultiStepRolloutWorker.init_worker``."""
+        if not hasattr(self.cfg, "actor") or not hasattr(self.cfg, "rollout"):
+            raise ValueError(
+                "use_policy_inference=True requires ``actor`` and ``rollout`` in the Hydra config "
+                "(see examples/embodiment/config/realworld_piper_collect_policy.yaml)."
+            )
+        rollout_model_config = copy.deepcopy(self.cfg.actor.model)
+        with open_dict(rollout_model_config):
+            rollout_model_config.precision = self.cfg.rollout.model.precision
+            rollout_model_config.model_path = self.cfg.rollout.model.model_path
+
+        self._policy = get_model(rollout_model_config)
+        ckpt_path = self.cfg.runner.get("ckpt_path", None)
+        if ckpt_path:
+            state = torch.load(ckpt_path, map_location="cpu")
+            self._policy.load_state_dict(state)
+        self._policy.eval()
+        self._num_action_chunks = int(self.cfg.actor.model.num_action_chunks)
+        self.log_info(
+            f"[collect] Policy loaded from {self.cfg.rollout.model.model_path}, "
+            f"num_action_chunks={self._num_action_chunks}"
+        )
+
+    def _policy_predict_kwargs(self, mode: str) -> dict:
+        """Match ``MultiStepRolloutWorker.predict`` kwargs for common embodied models."""
+        kwargs: dict = {}
+        mt = SupportedModel(self.cfg.actor.model.model_type)
+        if mt in (
+            SupportedModel.OPENPI,
+            SupportedModel.MLP_POLICY,
+            SupportedModel.GR00T,
+            SupportedModel.CNN_POLICY,
+        ):
+            alg = getattr(self.cfg, "algorithm", None)
+            if (
+                alg is not None
+                and getattr(alg, "loss_type", None) == "embodied_dagger"
+            ):
+                kwargs["mode"] = "eval"
+            else:
+                kwargs["mode"] = mode
+        if mt in (
+            SupportedModel.CNN_POLICY,
+            SupportedModel.FLOW_POLICY,
+            SupportedModel.MLP_POLICY,
+        ):
+            kwargs["return_obs"] = not hasattr(self._policy, "q_head")
+        return kwargs
+
+    def _obs_for_policy(self, obs: dict) -> dict:
+        """Move tensor observations to the policy device; keep ``task_descriptions`` as-is."""
+        device = next(self._policy.parameters()).device
+        out: dict = {}
+        for key, val in obs.items():
+            if key == "task_descriptions":
+                out[key] = val
+            elif isinstance(val, torch.Tensor):
+                out[key] = val.to(device, non_blocking=True)
+            elif isinstance(val, np.ndarray):
+                out[key] = torch.from_numpy(val).to(device)
+            else:
+                out[key] = val
+        # OpenPI ``obs_processor`` requires these keys (see ``openpi_action_model.obs_processor``).
+        if "task_descriptions" not in out:
+            default_prompt = self.cfg.runner.get("default_task_prompt", "robot manipulation")
+            out["task_descriptions"] = [default_prompt]
+        # LiberoInputs always reads ``observation/wrist_image``; ``obs_processor`` only sets it when
+        # ``wrist_images`` is not None. Duplicate main or use first extra camera as wrist view.
+        if out.get("wrist_images") is None:
+            if out.get("extra_view_images") is not None:
+                ev = out["extra_view_images"]
+                if isinstance(ev, torch.Tensor) and ev.dim() >= 2 and ev.shape[1] > 0:
+                    out["wrist_images"] = ev[:, 0].contiguous()
+                elif isinstance(ev, np.ndarray) and ev.ndim >= 2 and ev.shape[1] > 0:
+                    out["wrist_images"] = torch.from_numpy(ev[:, 0]).to(device)
+            if out.get("wrist_images") is None and "main_images" in out:
+                mi = out["main_images"]
+                out["wrist_images"] = (
+                    mi.clone() if isinstance(mi, torch.Tensor) else torch.from_numpy(mi).to(device)
+                )
+        return out
+
     def _process_obs(self, obs):
         """
         Process observations to match the format expected by EmbodiedRolloutResult.
         """
+        # Shallow copy: when ``record_task_description`` is false we pop task_descriptions; the same
+        # ``obs`` dict is still used later for policy inference and must keep task_descriptions.
+        obs = dict(obs)
         if not self.cfg.runner.record_task_description:
             obs.pop("task_descriptions", None)
 
@@ -138,6 +238,116 @@ class DataCollector(Worker):
             )
 
     def run(self):
+        if self.use_policy_inference:
+            self._run_with_policy()
+        else:
+            self._run_manual_only()
+
+    def _run_with_policy(self) -> None:
+        """Rollout with the same ``prepare_actions`` + ``chunk_step`` path as async training."""
+        predict_mode = str(self.cfg.runner.get("policy_predict_mode", "eval"))
+        success_cnt = 0
+        progress_bar = tqdm(
+            range(self.num_data_episodes), desc="Collecting Data Episodes (policy):"
+        )
+
+        while success_cnt < self.num_data_episodes:
+            obs, _ = self.env.reset()
+            current_rollout = EmbodiedRolloutResult(
+                max_episode_length=self.cfg.env.eval.max_episode_steps,
+            )
+            current_obs_processed = self._process_obs(obs)
+            episode_done = False
+
+            while not episode_done:
+                env_obs = self._obs_for_policy(obs)
+                pred_kw = self._policy_predict_kwargs(predict_mode)
+                with torch.no_grad():
+                    raw_actions, result = self._policy.predict_action_batch(
+                        env_obs=env_obs, **pred_kw
+                    )
+
+                chunk_actions = prepare_actions(
+                    raw_chunk_actions=raw_actions,
+                    env_type=self.cfg.env.eval.env_type,
+                    model_type=self.cfg.actor.model.model_type,
+                    num_action_chunks=self.cfg.actor.model.num_action_chunks,
+                    action_dim=self.cfg.actor.model.action_dim,
+                )
+                if isinstance(chunk_actions, np.ndarray):
+                    chunk_actions_t = torch.from_numpy(chunk_actions).float()
+                else:
+                    chunk_actions_t = chunk_actions.float()
+
+                (
+                    obs_list,
+                    chunk_rewards,
+                    chunk_terminations,
+                    chunk_truncations,
+                    _infos_list,
+                ) = self.env.chunk_step(chunk_actions_t)
+                next_obs = obs_list[-1]
+                next_obs_processed = self._process_obs(next_obs)
+                chunk_dones = torch.logical_or(chunk_terminations, chunk_truncations)
+
+                actions_stored = result["forward_inputs"].get("action")
+                if actions_stored is None:
+                    ra = raw_actions
+                    if isinstance(ra, torch.Tensor):
+                        actions_stored = ra.reshape(ra.shape[0], -1).cpu()
+                    else:
+                        actions_stored = torch.from_numpy(np.asarray(ra)).reshape(
+                            np.asarray(ra).shape[0], -1
+                        )
+
+                step_result = ChunkStepResult(
+                    actions=actions_stored,
+                    prev_logprobs=result.get("prev_logprobs"),
+                    prev_values=result.get("prev_values"),
+                    rewards=chunk_rewards,
+                    dones=chunk_dones,
+                    terminations=chunk_terminations,
+                    truncations=chunk_truncations,
+                    forward_inputs=result["forward_inputs"],
+                )
+                current_rollout.append_step_result(step_result)
+                current_rollout.append_transitions(
+                    curr_obs=current_obs_processed, next_obs=next_obs_processed
+                )
+
+                obs = next_obs
+                current_obs_processed = next_obs_processed
+                episode_done = bool(chunk_dones.any())
+
+            if isinstance(chunk_rewards, torch.Tensor):
+                r_val = float(chunk_rewards.sum().item())
+            else:
+                r_val = float(np.sum(chunk_rewards))
+
+            if self.count_success_episodes_only:
+                success_cnt += int(r_val)
+            else:
+                success_cnt += 1
+            self.total_cnt += 1
+            self.log_info(
+                f"Episode reward/signal (chunk sum): {r_val}. Total: {success_cnt}/{self.num_data_episodes}"
+            )
+
+            trajectory = current_rollout.to_trajectory()
+            trajectory.intervene_flags = torch.ones_like(trajectory.intervene_flags)
+            self.buffer.add_trajectories([trajectory])
+
+            self._wait_for_manual_reset()
+            progress_bar.update(1)
+
+        self.buffer.close()
+        self.log_info(
+            f"Finished. Demos saved in: {os.path.join(self.cfg.runner.logger.log_path, 'demos')}"
+        )
+        self.env.close()
+
+    def _run_manual_only(self) -> None:
+        """Original zero-action / SpaceMouse intervention collection."""
         obs, _ = self.env.reset()
         success_cnt = 0
         progress_bar = tqdm(

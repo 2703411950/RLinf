@@ -1,0 +1,49 @@
+# Piper 真机：策略 rollout + 同时保存 demo（与 async PPO 的 env+rollout 一步对齐，用 chunk_step）
+#
+# 用法（与 collect_data.sh 一致，ckpt 路径已写在下方 actor.model.model_path，无需命令行传参）：
+#   bash examples/embodiment/collect_data.sh realworld_piper_collect_policy
+#
+# 换机器或换权重时：只改 actor.model.model_path（rollout 会自动跟 ${actor.model.model_path}）。
+# 仍可用命令行临时覆盖：actor.model.model_path=/other/path
+#
+# 可选：加载额外 .pt 权重（在 get_model 之后 load_state_dict）：
+#   runner.ckpt_path=/path/to/extra.pt
+#
+# 上传到云端后，用 train_realworld_offline_async.sh 对 demos 做 offline actor 训练（replay buffer 路径指向本机 log 下 demos）。
+
+defaults:
+  - realworld_piper_collect_data_base
+  - model/pi0_5@actor.model
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+runner:
+  # 开启后由 OpenPI(pi05) 做推理，并用 chunk_step 执行（与 MultiStepRolloutWorker + EnvWorker 一致）
+  use_policy_inference: true
+  # 可选：predict_action_batch 的 mode（OpenPI 用 train/eval）
+  policy_predict_mode: eval
+  # 若提供 .pt，将在 get_model 加载 checkpoint 目录之后再 load_state_dict（一般留空即可）
+  ckpt_path: null
+  default_task_prompt: "adjust bottle"
+
+actor:
+  group_name: ActorGroup
+  model:
+    # 须与训练时 Piper 真机配置一致（state_dim / openpi.config_name 等）
+    model_path: /data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_20000
+    state_dim: 13
+    action_dim: 7
+    num_q_heads: 10
+
+rollout:
+  group_name: RolloutGroup
+  model:
+    # 与 actor 同目录；与 MultiStepRolloutWorker 一致
+    model_path: ${actor.model.model_path}
+    precision: ${actor.model.precision}
