@@ -25,19 +25,19 @@ hydra:
 #
 # 若只在 Piper 本机单机跑（无多节点 Ray）：num_nodes: 1，node_ranks: 0，hardware.configs.node_rank: 0。
 cluster:
-  num_nodes: 2
+  num_nodes: 1
   component_placement:
     env:
       node_group: piper_robot
       placement: 0
   node_groups:
     - label: piper_robot
-      node_ranks: 1
+      node_ranks: 0
       hardware:
         type: Piper
         configs:
           - can_name: "can0"
-            node_rank: 1
+            node_rank: 0
 
 runner:
   task_type: embodied
@@ -54,12 +54,14 @@ runner:
   # false：每结束一条轨迹（done）计 1 条，便于采集探索数据；true：仅成功回合计入 num_data_episodes（与原 Franka peg 行为一致）
   count_success_episodes_only: false
   # 每条轨迹保存后暂停，人工复位台面/工件后按 Enter，再执行 env.reset() 开始下一条。无终端/自动化可设 false 或 export RLINF_COLLECT_SKIP_PAUSE=1
-  pause_for_manual_reset: true
+  pause_for_manual_reset: false
 
 env:
   group_name: "EnvGroup"
   eval:
-    ignore_terminations: false
+    # 若为 false，Piper 在「关节已贴近 target_joint_pose」时第一步就 terminated；reset 默认位姿常与 target 同为 0，会导致每条轨迹长度=1。
+    # 采集演示数据时建议 true：仅按 max_episode_steps 截断结束 episode，成功判定仍可在 info 里查看。
+    ignore_terminations: true
     auto_reset: false
     # 不使用 GripperCloseEnv 裁剪到 6 维，保留完整 7 维动作（含夹爪）
     no_gripper: false

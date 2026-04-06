@@ -26,6 +26,8 @@ LOG_DIR="${REPO_PATH}/logs/offline/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}"
 MEGA_LOG_FILE="${LOG_DIR}/run_offline_realworld.log"
 mkdir -p "${LOG_DIR}"
 
+# If Hydra says load_path is not in struct, either add load_path: null under algorithm.replay_buffer
+# in that YAML, or use: +algorithm.replay_buffer.load_path=${REPLAY_DIR}
 CMD="python ${SRC_FILE} --config-path ${EMBODIED_PATH}/config/ --config-name ${CONFIG_NAME} \
   runner.logger.log_path=${LOG_DIR} \
   algorithm.replay_buffer.load_path=${REPLAY_DIR} \
