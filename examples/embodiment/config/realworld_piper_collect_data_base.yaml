@@ -26,7 +26,7 @@ cluster:
       hardware:
         type: Piper
         configs:
-          - can_name: "can0"
+          - can_name: "can1"
             node_rank: 0
 
 runner:
@@ -60,7 +60,8 @@ env:
       use_dense_reward: false
       target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
       reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-      # camera_serials: ["213622075557"]
+      camera_serials: ["152122078363","151222071331"]
+      # camera_serials: [213622075557, 152122078363, 151222071331] # left right top
   data_collection:
     enabled: true
     save_dir: ${runner.logger.log_path}/collected_data

@@ -206,7 +206,7 @@ class PiperController(Worker):
         joint_6 = round(action[6] * 70 * 1000)
         
         self.driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-        # self.driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+        self.driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
         self.driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
         
         # self.log_debug(f"Piper Move: args={[joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]}")
