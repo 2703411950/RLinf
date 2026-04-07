@@ -62,6 +62,11 @@ class RealWorldEnv(gym.Env):
         self.num_group = num_envs // cfg.group_size
         self.group_size = cfg.group_size
         self.main_image_key = cfg.main_image_key
+        # Optional state selection for policy input. If set, only selected keys
+        # from raw_obs["state"] are concatenated in the given order.
+        self.state_keys = cfg.get("state_keys", None)
+        if self.state_keys is not None:
+            self.state_keys = [str(k) for k in self.state_keys]
 
         self._init_env()
 
@@ -223,8 +228,18 @@ class RealWorldEnv(gym.Env):
         # Process states
         full_states = []
         raw_states = OrderedDict(sorted(raw_obs["state"].items()))
-        for value in raw_states.values():
-            full_states.append(value)
+        if self.state_keys is None:
+            selected_keys = list(raw_states.keys())
+        else:
+            selected_keys = self.state_keys
+            missing = [k for k in selected_keys if k not in raw_states]
+            if missing:
+                raise KeyError(
+                    f"Configured state_keys contain missing keys: {missing}. "
+                    f"Available state keys: {list(raw_states.keys())}"
+                )
+        for key in selected_keys:
+            full_states.append(raw_states[key])
         full_states = np.concatenate(full_states, axis=-1)
         obs["states"] = full_states
 

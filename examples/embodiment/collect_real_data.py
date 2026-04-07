@@ -94,18 +94,20 @@ class DataCollector(Worker):
                 ),
             )
 
-        # Initialize TrajectoryReplayBuffer
-        # Change directory name to 'demos' as requested
-        buffer_path = os.path.join(self.cfg.runner.logger.log_path, "demos")
-        self.log_info(f"Initializing ReplayBuffer at: {buffer_path}")
-
-        self.buffer = TrajectoryReplayBuffer(
-            seed=self.cfg.seed if hasattr(self.cfg, "seed") else 1234,
-            enable_cache=False,
-            auto_save=True,
-            auto_save_path=buffer_path,
-            trajectory_format="pt",
-        )
+        self.save_demos = bool(getattr(self.cfg.runner, "save_demos", True))
+        if self.save_demos:
+            buffer_path = os.path.join(self.cfg.runner.logger.log_path, "demos")
+            self.log_info(f"Initializing ReplayBuffer at: {buffer_path}")
+            self.buffer = TrajectoryReplayBuffer(
+                seed=self.cfg.seed if hasattr(self.cfg, "seed") else 1234,
+                enable_cache=False,
+                auto_save=True,
+                auto_save_path=buffer_path,
+                trajectory_format="pt",
+            )
+        else:
+            self.buffer = None
+            self.log_info("save_demos=false: trajectories will not be written to disk.")
 
         self.use_policy_inference = bool(
             getattr(self.cfg.runner, "use_policy_inference", False)
@@ -274,6 +276,8 @@ class DataCollector(Worker):
                     num_action_chunks=self.cfg.actor.model.num_action_chunks,
                     action_dim=self.cfg.actor.model.action_dim,
                 )
+
+                self.log_info(f"chunk_actions: {chunk_actions}")    
                 if isinstance(chunk_actions, np.ndarray):
                     chunk_actions_t = torch.from_numpy(chunk_actions).float()
                 else:
@@ -335,15 +339,20 @@ class DataCollector(Worker):
 
             trajectory = current_rollout.to_trajectory()
             trajectory.intervene_flags = torch.ones_like(trajectory.intervene_flags)
-            self.buffer.add_trajectories([trajectory])
+            if self.buffer is not None:
+                self.buffer.add_trajectories([trajectory])
 
             self._wait_for_manual_reset()
             progress_bar.update(1)
 
-        self.buffer.close()
-        self.log_info(
-            f"Finished. Demos saved in: {os.path.join(self.cfg.runner.logger.log_path, 'demos')}"
-        )
+        if self.buffer is not None:
+            self.buffer.close()
+        if self.save_demos:
+            self.log_info(
+                f"Finished. Demos saved in: {os.path.join(self.cfg.runner.logger.log_path, 'demos')}"
+            )
+        else:
+            self.log_info("Finished policy rollout (save_demos=false).")
         self.env.close()
 
     def _run_manual_only(self) -> None:
@@ -441,10 +450,10 @@ class DataCollector(Worker):
                     f"Episode reward/signal: {r_val}. Total: {success_cnt}/{self.num_data_episodes}"
                 )
 
-                # Save Trajectory to the 'demos' directory
                 trajectory = current_rollout.to_trajectory()
                 trajectory.intervene_flags = torch.ones_like(trajectory.intervene_flags)
-                self.buffer.add_trajectories([trajectory])
+                if self.buffer is not None:
+                    self.buffer.add_trajectories([trajectory])
 
                 self._wait_for_manual_reset()
 
@@ -456,10 +465,14 @@ class DataCollector(Worker):
                 )
                 progress_bar.update(1)
 
-        self.buffer.close()
-        self.log_info(
-            f"Finished. Demos saved in: {os.path.join(self.cfg.runner.logger.log_path, 'demos')}"
-        )
+        if self.buffer is not None:
+            self.buffer.close()
+        if self.save_demos:
+            self.log_info(
+                f"Finished. Demos saved in: {os.path.join(self.cfg.runner.logger.log_path, 'demos')}"
+            )
+        else:
+            self.log_info("Finished manual collection (save_demos=false).")
         self.env.close()
 
 

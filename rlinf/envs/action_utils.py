@@ -183,6 +183,15 @@ def prepare_actions_for_mujoco(raw_chunk_actions, model_type):
     return chunk_actions
 
 
+def prepare_actions_for_piper(raw_chunk_actions) -> np.ndarray:
+    """Prepare actions for Piper real-world control.
+
+    Piper policy output is already in chunk format expected by RealWorldEnv/PiperEnv,
+    so this adapter intentionally returns raw actions unchanged.
+    """
+    return raw_chunk_actions
+
+
 def prepare_actions(
     raw_chunk_actions,
     env_type: str,
@@ -248,7 +257,11 @@ def prepare_actions(
             action_space=policy,
         )
     elif env_type == SupportedEnvType.REALWORLD:
-        chunk_actions = raw_chunk_actions
+        # Explicit adapter for Piper under realworld.
+        if isinstance(policy, str) and policy.lower() == "piper":
+            chunk_actions = prepare_actions_for_piper(raw_chunk_actions=raw_chunk_actions)
+        else:
+            chunk_actions = raw_chunk_actions
     elif env_type == SupportedEnvType.FRANKASIM:
         chunk_actions = prepare_actions_for_mujoco(
             raw_chunk_actions=raw_chunk_actions,

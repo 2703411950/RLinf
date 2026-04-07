@@ -55,12 +55,18 @@ env:
     no_gripper: false
     use_spacemouse: false
     max_episode_steps: 100
+    main_image_key: "wrist_2"
+    
     override_cfg:
       is_dummy: false
       use_dense_reward: false
       target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
       reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
       camera_serials: ["152122078363","151222071331"]
+      # 在 Piper 环境里，camera_serials 会按顺序命名成：
+      # 第1个 serial -> wrist_1
+      # 第2个 serial -> wrist_2
+      # 第3个 serial -> wrist_3
       # camera_serials: [213622075557, 152122078363, 151222071331] # left right top
   data_collection:
     enabled: true

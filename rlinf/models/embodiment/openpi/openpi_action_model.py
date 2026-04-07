@@ -537,7 +537,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             prev_logprobs = outputs["prev_logprobs"]
             prev_values = outputs["prev_values"]
             forward_action = None
-
+        print(f"pi05 model output actions: {actions}")
         forward_inputs = {
             "chains": outputs["chains"],
             "denoise_inds": outputs["denoise_inds"],

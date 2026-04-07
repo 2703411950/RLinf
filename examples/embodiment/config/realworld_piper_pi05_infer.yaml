@@ -1,0 +1,79 @@
+# Piper 真机：仅 Pi0.5 策略推理（不写 demos / 不启用 lerobot 导出）。
+# 与 async 训练一致：RealWorldEnv.chunk_step + prepare_actions + predict_action_batch。
+#
+# 注意：不能 defaults 到 realworld_piper_collect_policy，因为该文件含 hydra.searchpath；
+# Hydra 只允许在「主配置」（本文件）里设置 searchpath。
+#
+# 用法：
+#   export REPO_PATH=/data/cyy/RLinf
+#   bash examples/embodiment/infer_realworld_piper_pi05.sh
+#
+# 覆盖 SFT 目录与任务语言：
+#   bash examples/embodiment/infer_realworld_piper_pi05.sh \
+#     actor.model.model_path=/path/to/your/pi05_sft \
+#     runner.default_task_prompt="你的任务描述"
+#
+# 若 SFT 时用的 openpi.config_name 不是默认 pi05_libero，需在命令行覆盖：
+#   actor.model.openpi.config_name=你的配置名
+#
+# 下方 cluster 与 realworld_piper_pi05_5090.yaml 一致（5090d + Piper），覆盖 collect_data_base 的 piper_robot。
+# 若需 piper_robot 节点组，删除本文件的 cluster 块或整段命令行覆盖为 collect_data_base 中的 cluster。
+
+defaults:
+  - realworld_piper_collect_data_base
+  - model/pi0_5@actor.model
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env:
+      node_group: "5090d"
+      placement: 0
+  node_groups:
+    - label: "5090d"
+      node_ranks: 0
+      hardware:
+        type: Piper
+        configs:
+          - can_name: "can1"
+            node_rank: 0
+
+runner:
+  use_policy_inference: true
+  policy_predict_mode: eval
+  ckpt_path: null
+  default_task_prompt: "adjust bottle"
+  save_demos: false
+  num_data_episodes: 100
+  experiment_name: "piper-pi05-infer"
+
+env:
+  data_collection:
+    enabled: false
+  eval:
+    enable_camera_player: false
+    env_type: realworld
+    # Match Pi05 SFT stats/input shape: 7 dims = joint_position(6) + gripper_position(1)
+    state_keys: ["joint_position", "gripper_position"]
+
+actor:
+  group_name: ActorGroup
+  model:
+    model_path: /data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_min_max_5000
+    state_dim: 7
+    action_dim: 7
+    num_q_heads: 10
+
+rollout:
+  group_name: RolloutGroup
+  model:
+    model_path: ${actor.model.model_path}
+    precision: ${actor.model.precision}
