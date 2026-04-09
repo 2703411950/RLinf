@@ -1,0 +1,104 @@
+defaults:
+  - model/pi0_5@actor.model
+  - training_backend/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: 0
+
+runner:
+  task_type: sft
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "piper_dualarm_sft_openpi_pi05"
+    logger_backends: ["tensorboard"]
+
+  max_epochs: 20000
+  max_steps: -1
+  val_check_interval: -1
+  save_interval: 5000
+
+data:
+  # Root directory that contains your local LeRobot dataset cache.
+  # If you use HF cache layout, set this to HF_LEROBOT_HOME.
+  train_data_paths: "/data/cyy/datasets/adk111/unscrew_the_bottle_capv2"
+
+algorithm:
+  adv_type: gae
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+  micro_batch_size: 16
+  global_batch_size: 64
+  seed: 0
+
+  # Applies to OpenPI dataloader (SFT worker)
+  openpi_data:
+    # Your dataset repo id in LeRobot format
+    repo_id: "adk111/unscrew_the_bottle_capv2"
+    # Bimanual Piper action dim (left 7 + right 7)
+    env_action_dim: 14
+    # Keep absolute action by default for this dataset
+    extra_delta_transform: false
+    # Map LeRobot keys to Piper policy expected keys
+    repack_mapping:
+      observation.images.cam_high: observation/image
+      observation.images.cam_left_wrist: observation/wrist_image
+      observation.state: observation/state
+      action: actions
+      task: prompt
+
+  # Override defaults from model/pi0_5
+  model:
+    precision: null
+    model_path: "/data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_20000"
+    num_action_chunks: 10
+    action_dim: 14
+    add_value_head: False
+    openpi:
+      config_name: "pi05_piper"
+      detach_critic_input: True
+      # cam_high + left_wrist
+      num_images_in_input: 2
+      train_expert_only: True
+
+  optim:
+    lr: 2.5e-5
+    value_lr: 1.55e-4
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    weight_decay: 1e-10
+    clip_grad: 1.0
+    total_training_steps: 30000
+    lr_warmup_steps: 1000
+    lr_scheduler: "cosine"
+    num_cycles: 0.5
+    min_lr: 2.5e-6
+
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "no_shard"
+    use_orig_params: False
+    gradient_checkpointing: False # for openpi, gradient checkpointing is not supported, please do not change this value
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+
+reward:
+  use_reward_model: False
+
+critic:
+  use_critic_model: False

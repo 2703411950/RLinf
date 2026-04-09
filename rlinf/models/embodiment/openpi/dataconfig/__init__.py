@@ -56,6 +56,10 @@ from rlinf.models.embodiment.openpi.dataconfig.maniskill_dataconfig import (
 from rlinf.models.embodiment.openpi.dataconfig.metaworld_dataconfig import (
     LeRobotMetaworldDataConfig,
 )
+from rlinf.models.embodiment.openpi.dataconfig.piper_dataconfig import (
+    LeRobotPiperDataConfig,
+    coerce_piper_data_kwargs,
+)
 from rlinf.models.embodiment.openpi.dataconfig.robocasa_dataconfig import (
     LeRobotRobocasaDataConfig,
 )
@@ -397,6 +401,23 @@ _CONFIGS = [
         ),
         pytorch_weight_path="checkpoints/torch/pi05_base",
     ),
+    TrainConfig(
+        name="pi05_piper",
+        model=pi0_config.Pi0Config(
+            pi05=True, action_horizon=10, discrete_state_input=False
+        ),
+        data=LeRobotPiperDataConfig(
+            repo_id="adk111/unscrew_the_bottle_capv2",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(assets_dir="checkpoints/torch/pi05_piper/assets"),
+            extra_delta_transform=False,
+            env_action_dim=14,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "checkpoints/jax/pi05_base"
+        ),
+        pytorch_weight_path="checkpoints/torch/pi05_base",
+    ),
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
@@ -431,6 +452,8 @@ def _override_with_model_path(config: TrainConfig, model_path: str) -> TrainConf
 
 def _override_with_data_kwargs(config: TrainConfig, data_kwargs: dict) -> TrainConfig:
     """Return a copy of the config with data_config set from openpi_data."""
+    if config.name == "pi05_piper":
+        data_kwargs = coerce_piper_data_kwargs(data_kwargs)
     data_config = dataclasses.replace(config.data, **data_kwargs)
     replace_kwargs = {"data": data_config}
     return dataclasses.replace(config, **replace_kwargs)
