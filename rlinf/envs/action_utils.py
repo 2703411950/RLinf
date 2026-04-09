@@ -189,6 +189,7 @@ def prepare_actions_for_piper(raw_chunk_actions) -> np.ndarray:
     Piper policy output is already in chunk format expected by RealWorldEnv/PiperEnv,
     so this adapter intentionally returns raw actions unchanged.
     """
+    print("do nothing")
     return raw_chunk_actions
 
 
@@ -199,7 +200,7 @@ def prepare_actions(
     num_action_chunks,
     action_dim,
     action_scale: float = 1.0,
-    policy: str = "widowx_bridge",
+    policy: str = "piper",
     wm_env_type=None,
 ) -> torch.Tensor | np.ndarray:
     raw_chunk_actions = (

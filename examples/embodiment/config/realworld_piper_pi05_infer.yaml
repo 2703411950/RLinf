@@ -13,8 +13,12 @@
 #     actor.model.model_path=/path/to/your/pi05_sft \
 #     runner.default_task_prompt="你的任务描述"
 #
-# 若 SFT 时用的 openpi.config_name 不是默认 pi05_libero，需在命令行覆盖：
-#   actor.model.openpi.config_name=你的配置名
+# Piper 真机推荐 ``pi05_piper``（与 pi05_libero 权重/资产一致，但数据变换参数可在 YAML 里配）。
+# 若仍用 libero 数据配置名：
+#   actor.model.openpi.config_name=pi05_libero
+# 可调参数见 ``LeRobotPiperDataConfig``，经 ``actor.openpi_data`` 覆盖，例如：
+#   actor.openpi_data.override_use_quantile_norm=true
+#   actor.openpi_data.env_action_dim=7
 #
 # 下方 cluster 与 realworld_piper_pi05_5090.yaml 一致（5090d + Piper），覆盖 collect_data_base 的 piper_robot。
 # 若需 piper_robot 节点组，删除本文件的 cluster 块或整段命令行覆盖为 collect_data_base 中的 cluster。
@@ -66,11 +70,18 @@ env:
 
 actor:
   group_name: ActorGroup
+  # openpi_data 会 merge 进 LeRobotPiperDataConfig（见 rlinf/.../piper_dataconfig.py）
+  # openpi_data:
+  #   override_use_quantile_norm: true
+  #   synthetic_wrist_from_base: true
+  #   env_action_dim: 7
   model:
-    model_path: /data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_min_max_5000
+    model_path: /data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_20000
     state_dim: 7
     action_dim: 7
     num_q_heads: 10
+    openpi:
+      config_name: pi05_piper
 
 rollout:
   group_name: RolloutGroup

@@ -40,6 +40,8 @@ def get_model(cfg: DictConfig, torch_dtype=None):
         config_name, model_path=cfg.model_path, data_kwargs=data_kwargs
     )
 
+    print(f"actor_train_config: {actor_train_config}")
+
     actor_model_config = actor_train_config.model
     actor_model_config = OpenPi0Config(**actor_model_config.__dict__)
     override_model_config_kwargs = cfg.openpi
