@@ -33,6 +33,8 @@ runner:
     logger_backends: ["tensorboard"] # wandb, swanlab
   num_data_episodes: 20
   record_task_description: False
+  # 真机采集：每条 episode 结束后先等人复位场景再按 Enter；自动化/CI 保持 false
+  pause_for_manual_reset: false
 
 env:
   group_name: "EnvGroup"

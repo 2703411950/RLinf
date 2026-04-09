@@ -369,7 +369,8 @@ class Trajectory:
     trajectory contains multiple episodes.
     """
 
-    max_episode_length: int = 0  # max episode length
+    max_episode_length: int = 0  # upper bound from env config (e.g. max_episode_steps)
+    episode_length: int = 0  # actual time steps T (``actions`` etc. are ``[T, B, ...]``)
     model_weights_id: str = ""  # str(uuid(versions))
     actions: torch.Tensor = None
     intervene_flags: torch.Tensor = None
@@ -476,23 +477,26 @@ class Trajectory:
                 truncations = self.truncations[:, i : i + 1][field_mask]
                 dones = self.dones[:, i : i + 1][field_mask]
 
-            filtered_trajectories.append(
-                Trajectory(
-                    max_episode_length=self.max_episode_length,
-                    model_weights_id=self.model_weights_id,
-                    actions=actions,
-                    intervene_flags=intervene_flags,
-                    rewards=rewards,
-                    terminations=terminations,
-                    truncations=truncations,
-                    dones=dones,
-                    prev_logprobs=prev_logprobs,
-                    prev_values=prev_values,
-                    forward_inputs=forward_inputs,
-                    curr_obs=curr_obs,
-                    next_obs=next_obs,
-                )
+            ft = Trajectory(
+                max_episode_length=self.max_episode_length,
+                model_weights_id=self.model_weights_id,
+                actions=actions,
+                intervene_flags=intervene_flags,
+                rewards=rewards,
+                terminations=terminations,
+                truncations=truncations,
+                dones=dones,
+                prev_logprobs=prev_logprobs,
+                prev_values=prev_values,
+                forward_inputs=forward_inputs,
+                curr_obs=curr_obs,
+                next_obs=next_obs,
             )
+            if ft.actions is not None:
+                ft.episode_length = int(ft.actions.shape[0])
+            elif ft.rewards is not None:
+                ft.episode_length = int(ft.rewards.shape[0])
+            filtered_trajectories.append(ft)
 
         return filtered_trajectories if filtered_trajectories else None
 
@@ -676,6 +680,13 @@ class EmbodiedRolloutResult:
             if trajectory.versions is not None
             else torch.zeros(1, dtype=torch.float32)
         )
+
+        if trajectory.actions is not None:
+            trajectory.episode_length = int(trajectory.actions.shape[0])
+        elif trajectory.rewards is not None:
+            trajectory.episode_length = int(trajectory.rewards.shape[0])
+        else:
+            trajectory.episode_length = 0
 
         return trajectory
 

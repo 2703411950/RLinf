@@ -14,6 +14,7 @@
 
 
 import os
+import sys
 
 import hydra
 import numpy as np
@@ -35,6 +36,23 @@ class DataCollector(Worker):
 
         self.cfg = cfg
         self.num_data_episodes = cfg.runner.num_data_episodes
+        self.action_dim = int(cfg.runner.get("action_dim", 7))
+        self.count_success_episodes_only = bool(
+            cfg.runner.get("count_success_episodes_only", True)
+        )
+        self.pause_for_manual_reset = bool(cfg.runner.get("pause_for_manual_reset", False))
+        if os.environ.get("RLINF_COLLECT_SKIP_PAUSE", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            self.pause_for_manual_reset = False
+        self.pause_for_manual_reset_prompt = str(
+            cfg.runner.get(
+                "pause_for_manual_reset_prompt",
+                "[数据采集] 本段轨迹已保存。请手动复位场景（工件/台面等），完成后按 Enter 继续：将执行机械臂 reset 并开始下一段。",
+            )
+        )
         self.total_cnt = 0
         self.env = RealWorldEnv(
             cfg.env.eval,
@@ -105,6 +123,20 @@ class DataCollector(Worker):
 
         return ret_obs
 
+    def _wait_for_manual_reset(self) -> None:
+        """Block until the operator finishes manual scene reset (stdin Enter)."""
+        if not self.pause_for_manual_reset:
+            return
+        msg = self.pause_for_manual_reset_prompt
+        self.log_info(msg)
+        print(msg, file=sys.stderr, flush=True)
+        try:
+            input()
+        except EOFError:
+            self.log_warning(
+                "stdin closed (non-interactive); skip manual reset pause."
+            )
+
     def run(self):
         obs, _ = self.env.reset()
         success_cnt = 0
@@ -131,7 +163,7 @@ class DataCollector(Worker):
             next_obs_processed = self._process_obs(next_obs)
 
             # --- Construct ChunkStepResult ---
-            # Prepare action tensor [1, 6]
+            # Prepare action tensor [1, action_dim] (e.g. Piper 7 = 6 joints + gripper)
             if isinstance(action, torch.Tensor):
                 action_tensor = action.float().cpu()
             else:
@@ -148,19 +180,28 @@ class DataCollector(Worker):
             if reward_tensor.ndim == 1:
                 reward_tensor = reward_tensor.unsqueeze(1)
 
-            if isinstance(done, torch.Tensor):
-                done_tensor = done.bool().cpu()
+            if isinstance(terminations, torch.Tensor):
+                term_t = terminations.bool().cpu()
             else:
-                done_tensor = torch.tensor(done).bool()
-            if done_tensor.ndim == 1:
-                done_tensor = done_tensor.unsqueeze(1)
+                term_t = torch.tensor(terminations).bool()
+            if term_t.ndim == 1:
+                term_t = term_t.unsqueeze(1)
+
+            if isinstance(truncations, torch.Tensor):
+                trunc_t = truncations.bool().cpu()
+            else:
+                trunc_t = torch.tensor(truncations).bool()
+            if trunc_t.ndim == 1:
+                trunc_t = trunc_t.unsqueeze(1)
+
+            done_tensor = term_t | trunc_t
 
             step_result = ChunkStepResult(
                 actions=action_tensor,
                 rewards=reward_tensor,
                 dones=done_tensor,
-                terminations=done_tensor,
-                truncations=torch.zeros_like(done_tensor),
+                terminations=term_t,
+                truncations=trunc_t,
                 forward_inputs={"action": action_tensor},
             )
 
@@ -172,7 +213,8 @@ class DataCollector(Worker):
             obs = next_obs
             current_obs_processed = next_obs_processed
 
-            if done:
+            episode_done = bool(done_tensor.any()) if isinstance(done_tensor, torch.Tensor) else bool(done_tensor)
+            if episode_done:
                 r_val = (
                     reward[0]
                     if hasattr(reward, "__getitem__") and len(reward) > 0
@@ -199,7 +241,9 @@ class DataCollector(Worker):
 
                     progress_bar.update(1)
 
-                # Reset for next episode
+                self._wait_for_manual_reset()
+
+                # Reset for next episode (robot returns to configured reset pose)
                 obs, _ = self.env.reset()
                 current_obs_processed = self._process_obs(obs)
                 current_rollout = EmbodiedRolloutResult(

@@ -570,7 +570,7 @@ class FSDPModelManager:
 
         for key, params in filtered_params_dict.items():
             assert len(params) > 0, (
-                f"optimer {key=} is not match any params, with {param_filters(key)=}"
+                f"optimizer {key=} matched no params, with {param_filters[key]=}"
             )
         for key, params in filtered_params_dict.items():
             optimizers.append(
