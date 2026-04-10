@@ -128,6 +128,11 @@ class DataCollector(Worker):
         with open_dict(rollout_model_config):
             rollout_model_config.precision = self.cfg.rollout.model.precision
             rollout_model_config.model_path = self.cfg.rollout.model.model_path
+            # Keep OpenPI dataconfig overrides (e.g. env_action_dim) in inference path.
+            if hasattr(self.cfg.actor, "openpi_data"):
+                rollout_model_config.openpi_data = copy.deepcopy(
+                    self.cfg.actor.openpi_data
+                )
 
         self._policy = get_model(rollout_model_config)
         ckpt_path = self.cfg.runner.get("ckpt_path", None)
@@ -279,7 +284,7 @@ class DataCollector(Worker):
                     action_dim=self.cfg.actor.model.action_dim,
                 )
 
-                # self.log_info(f"chunk_actions: {chunk_actions}")    
+                self.log_info(f"chunk_actions: {chunk_actions}")    
                 if isinstance(chunk_actions, np.ndarray):
                     chunk_actions_t = torch.from_numpy(chunk_actions).float()
                 else:

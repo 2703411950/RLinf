@@ -40,7 +40,7 @@ runner:
   num_data_episodes: 10
   record_task_description: false
   # Piper 为 6 关节 + 夹爪；占位 step 与 ChunkStepResult 形状一致
-  action_dim: 7
+  action_dim: 14
   # false：每结束一条轨迹（done）计 1 条，便于采集探索数据；true：仅成功回合计入 num_data_episodes（与原 Franka peg 行为一致）
   count_success_episodes_only: false
   # 每条轨迹保存后暂停，人工复位台面/工件后按 Enter，再执行 env.reset() 开始下一条。无终端/自动化可设 false 或 export RLINF_COLLECT_SKIP_PAUSE=1
@@ -55,14 +55,16 @@ env:
     no_gripper: false
     use_spacemouse: false
     max_episode_steps: 100
-    main_image_key: "wrist_2"
+    main_image_key: "wrist_3"
     
     override_cfg:
       is_dummy: false
       use_dense_reward: false
-      target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-      reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-      camera_serials: ["152122078363","151222071331"]
+      target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+      reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      # camera_serials: ["152122078363","151222071331"]
+      camera_serials: ["213622075557", "152122078363", "151222071331"] # left right top
+
       # 在 Piper 环境里，camera_serials 会按顺序命名成：
       # 第1个 serial -> wrist_1
       # 第2个 serial -> wrist_2

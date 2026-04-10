@@ -47,15 +47,17 @@ cluster:
       hardware:
         type: Piper
         configs:
-          - can_name: "can1"
+          # Single arm: "can0"
+          # Dual arm: "can0,can1" (left,right)
+          - can_name: "can0,can1"
             node_rank: 0
 
 runner:
   use_policy_inference: true
   policy_predict_mode: eval
   ckpt_path: null
-  default_task_prompt: "adjust bottle"
-  save_demos: false
+  default_task_prompt: "unscrew the bottle cap"
+  save_demos: true
   num_data_episodes: 100
   experiment_name: "piper-pi05-infer"
 
@@ -71,14 +73,15 @@ env:
 actor:
   group_name: ActorGroup
   # openpi_data 会 merge 进 LeRobotPiperDataConfig（见 rlinf/.../piper_dataconfig.py）
-  # openpi_data:
-  #   override_use_quantile_norm: true
-  #   synthetic_wrist_from_base: true
-  #   env_action_dim: 7
+  openpi_data:
+    # override_use_quantile_norm: true
+    # synthetic_wrist_from_base: true
+    env_action_dim: 14
   model:
-    model_path: /data/cyy/ckpts/adk111/pi05_SFT_AdjustBottle_20000
-    state_dim: 7
-    action_dim: 7
+    model_path: /data/cyy/ckpts/adk111/pi05_unscrew_the_bottle_capv2_5000
+    state_dim: 14
+    action_dim: 14
+    num_action_chunks: 50
     num_q_heads: 10
     openpi:
       config_name: pi05_piper

@@ -30,15 +30,18 @@ from rlinf.utils.logging import get_logger
 
 from .piper_robot_state import PiperRobotState
 
-# Piper 动作统一为 7 维（与 PiperController.move_arm 一致）：
-# - gym action_space 为 [-1, 1]^7，与 SAC/CNN（tanh）策略输出一致。
-# - step() 内将前 6 维从 [-1, 1] 线性映射到 joint_limit_min/max 内的绝对关节角（弧度），
-#   第 7 维为夹爪指令 [-1, 1]，交由 PiperController 映射到硬件（GripperCtrl）。
+# Piper 双臂动作统一为 14 维：
+# - 左臂 7 维 + 右臂 7 维（每臂: 6 关节 + 1 夹爪）。
+# - gym action_space 仍为 Box([-1,1]^14)（兼容旧策略与 checker）；step() 内 **不做数值映射**，
+#   原样交给 ``PiperController``（缩放/限幅等在 controller 或上层策略侧完成）。
 # NOTE: Currently PiperEnv is configured for joint-space control since SDK naturally provides joint methods.
 # Integrating Cartesian space logic will require IK/FK module in future.
 
-PIPER_ACTION_DIM = 7
-PIPER_ARM_JOINT_DIM = 6
+PIPER_NUM_ARMS = 2
+PIPER_SINGLE_ARM_ACTION_DIM = 7
+PIPER_SINGLE_ARM_JOINT_DIM = 6
+PIPER_ACTION_DIM = PIPER_NUM_ARMS * PIPER_SINGLE_ARM_ACTION_DIM
+PIPER_ARM_JOINT_DIM = PIPER_NUM_ARMS * PIPER_SINGLE_ARM_JOINT_DIM
 
 
 @dataclass
@@ -61,8 +64,12 @@ class PiperRobotConfig:
     reward_threshold: np.ndarray = field(default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM))
     enable_random_reset: bool = False
 
-    joint_limit_min: np.ndarray = field(default_factory=lambda: -np.ones(6) * 3.14)
-    joint_limit_max: np.ndarray = field(default_factory=lambda: np.ones(6) * 3.14)
+    joint_limit_min: np.ndarray = field(
+        default_factory=lambda: -np.ones(PIPER_ARM_JOINT_DIM) * 3.14
+    )
+    joint_limit_max: np.ndarray = field(
+        default_factory=lambda: np.ones(PIPER_ARM_JOINT_DIM) * 3.14
+    )
     
     binary_gripper_threshold: float = 0.5
     enable_gripper_penalty: bool = True
@@ -71,7 +78,6 @@ class PiperRobotConfig:
 
 
 class PiperEnv(gym.Env):
-    """Piper 机械臂环境：7 维动作（6 关节绝对角 + 1 夹爪），见模块顶部说明。"""
 
     def __init__(
         self,
@@ -145,24 +151,16 @@ class PiperEnv(gym.Env):
             worker_rank=self.env_worker_rank,
         )
 
-    # TODO：range of gripper command need to be tested
     def _normalized_action_to_command(self, action: np.ndarray) -> np.ndarray:
-        """Map policy action in [-1, 1]^7 to PiperController command (rad + gripper cmd)."""
+        """Pass-through: no clip or rescale; ``move_arm`` owns all numerical handling."""
         a = np.asarray(action, dtype=np.float64).reshape(-1)
         assert a.shape == (PIPER_ACTION_DIM,), (
             f"Piper action must be shape ({PIPER_ACTION_DIM},), got {a.shape}"
         )
-        a = np.clip(a, self.action_space.low, self.action_space.high)
-        j_lo = np.asarray(self.config.joint_limit_min, dtype=np.float64).reshape(-1)
-        j_hi = np.asarray(self.config.joint_limit_max, dtype=np.float64).reshape(-1)
-        t = (np.clip(a[:PIPER_ARM_JOINT_DIM], -1.0, 1.0) + 1.0) * 0.5
-        command = np.zeros(PIPER_ACTION_DIM, dtype=np.float64)
-        command[:PIPER_ARM_JOINT_DIM] = j_lo + t * (j_hi - j_lo)
-        command[PIPER_ARM_JOINT_DIM] = float(np.clip(a[PIPER_ARM_JOINT_DIM], -1.0, 1.0))
-        return command
+        return a.copy()
 
     def step(self, action: np.ndarray):
-        """执行一步。`action` 为 7 维，取值在 ``action_space``（默认 [-1,1]^7）内。"""
+        """执行一步。`action` 为 14 维，原样传入 controller（不做环境侧映射）。"""
         start_time = time.time()
 
         action = np.asarray(action, dtype=np.float64).reshape(-1)
@@ -194,23 +192,25 @@ class PiperEnv(gym.Env):
         return self._num_steps
 
     def _target_joint_pose_vec(self) -> np.ndarray:
+        joint_dim = self._get_joint_dim()
         t = np.asarray(self.config.target_joint_pose, dtype=np.float64).reshape(-1)
-        if len(t) >= PIPER_ARM_JOINT_DIM:
-            return t[:PIPER_ARM_JOINT_DIM].copy()
+        if len(t) >= joint_dim:
+            return t[:joint_dim].copy()
         if len(t) == 0:
-            return np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
+            return np.zeros(joint_dim, dtype=np.float64)
         raise ValueError(
-            f"target_joint_pose must have at least {PIPER_ARM_JOINT_DIM} elements, got {len(t)}"
+            f"target_joint_pose must have at least {joint_dim} elements, got {len(t)}"
         )
 
     def _reward_threshold_vec(self) -> np.ndarray:
+        joint_dim = self._get_joint_dim()
         r = np.asarray(self.config.reward_threshold, dtype=np.float64).reshape(-1)
         if r.size == 0:
-            return np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
-        if r.size >= PIPER_ARM_JOINT_DIM:
-            return r[:PIPER_ARM_JOINT_DIM].copy()
+            return np.zeros(joint_dim, dtype=np.float64)
+        if r.size >= joint_dim:
+            return r[:joint_dim].copy()
         raise ValueError(
-            f"reward_threshold must have at least {PIPER_ARM_JOINT_DIM} elements, got {r.size}"
+            f"reward_threshold must have at least {joint_dim} elements, got {r.size}"
         )
 
     def _calc_step_reward(self, observation: dict) -> float:
@@ -249,14 +249,23 @@ class PiperEnv(gym.Env):
         # Move back to initial pose
         if self.config.enable_random_reset:
             reset_pose = self._reset_pose.copy()
-            reset_pose += np.random.uniform(-0.05, 0.05, (6,))
+            reset_pose += np.random.uniform(-0.05, 0.05, reset_pose.shape)
         else:
             reset_pose = self._reset_pose.copy()
 
-        self._controller.reset_joint(reset_pose)
+        if hasattr(self._controller, "reset_joint_dual"):
+            self._controller.reset_joint_dual(reset_pose).wait()
+        elif reset_pose.shape[0] == PIPER_SINGLE_ARM_JOINT_DIM:
+            self._controller.reset_joint(reset_pose).wait()
+        else:
+            # Backward compatibility: old controller only supports single-arm reset.
+            self._logger.warning(
+                "PiperController has no dual-arm reset API; fallback to first arm reset."
+            )
+            self._controller.reset_joint(reset_pose[:PIPER_SINGLE_ARM_JOINT_DIM]).wait()
 
     def _init_action_obs_spaces(self):
-        # 7D：策略 [-1,1]^7；step 内映射为关节绝对角（弧度）+ 夹爪指令
+        # 14D：策略 [-1,1]^14（左臂 7 + 右臂 7）
         self.action_space = gym.spaces.Box(
             np.ones(PIPER_ACTION_DIM, dtype=np.float32) * -1,
             np.ones(PIPER_ACTION_DIM, dtype=np.float32),
@@ -266,9 +275,15 @@ class PiperEnv(gym.Env):
             {
                 "state": gym.spaces.Dict(
                     {
-                        "joint_position": gym.spaces.Box(-np.inf, np.inf, shape=(6,)),
-                        "joint_velocity": gym.spaces.Box(-np.inf, np.inf, shape=(6,)),
-                        "gripper_position": gym.spaces.Box(-np.inf, np.inf, shape=(1,)),
+                        "joint_position": gym.spaces.Box(
+                            -np.inf, np.inf, shape=(PIPER_ARM_JOINT_DIM,)
+                        ),
+                        "joint_velocity": gym.spaces.Box(
+                            -np.inf, np.inf, shape=(PIPER_ARM_JOINT_DIM,)
+                        ),
+                        "gripper_position": gym.spaces.Box(
+                            -np.inf, np.inf, shape=(PIPER_NUM_ARMS,)
+                        ),
                     }
                 ),
                 "frames": gym.spaces.Dict(
@@ -334,17 +349,50 @@ class PiperEnv(gym.Env):
 
     def _move_action(self, action: np.ndarray):
         if not self.config.is_dummy:
-            self._controller.move_arm(action).wait()
+            if hasattr(self._controller, "move_arm_dual"):
+                self._controller.move_arm_dual(action).wait()
+            elif action.shape[0] == PIPER_SINGLE_ARM_ACTION_DIM:
+                self._controller.move_arm(action).wait()
+            else:
+                # Backward compatibility: old controller only supports one arm.
+                self._logger.warning(
+                    "PiperController has no dual-arm API; fallback to first arm action."
+                )
+                self._controller.move_arm(action[:PIPER_SINGLE_ARM_ACTION_DIM]).wait()
         else:
             self._logger.debug(f"Dummy move: {action}")
+
+    def _expand_or_truncate(self, vec: np.ndarray, target_dim: int) -> np.ndarray:
+        """Adapt observed state vector to target dim by truncating or zero-padding."""
+        v = np.asarray(vec, dtype=np.float64).reshape(-1)
+        if v.size >= target_dim:
+            return v[:target_dim].copy()
+        out = np.zeros(target_dim, dtype=np.float64)
+        out[: v.size] = v
+        return out
+
+    def _get_joint_dim(self) -> int:
+        v = np.asarray(self._piper_state.arm_joint_position).reshape(-1)
+        if v.size > 0:
+            return v.size
+        return PIPER_ARM_JOINT_DIM
 
     def _get_observation(self) -> dict:
         if not self.config.is_dummy:
             frames = self._get_camera_frames()
+            joint_position = self._expand_or_truncate(
+                self._piper_state.arm_joint_position, PIPER_ARM_JOINT_DIM
+            )
+            joint_velocity = self._expand_or_truncate(
+                self._piper_state.arm_joint_velocity, PIPER_ARM_JOINT_DIM
+            )
+            gripper_position = self._expand_or_truncate(
+                np.array([self._piper_state.gripper_position]), PIPER_NUM_ARMS
+            )
             state = {
-                "joint_position": self._piper_state.arm_joint_position,
-                "joint_velocity": self._piper_state.arm_joint_velocity,
-                "gripper_position": np.array([self._piper_state.gripper_position]),
+                "joint_position": joint_position,
+                "joint_velocity": joint_velocity,
+                "gripper_position": gripper_position,
             }
             return {
                 "state": state,

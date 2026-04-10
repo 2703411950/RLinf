@@ -48,7 +48,7 @@ class PiperController(Worker):
 
     @staticmethod
     def launch_controller(
-        can_name: str,
+        can_name: str | list[str] | tuple[str, ...],
         env_idx: int = 0,
         node_rank: int = 0,
         worker_rank: int = 0,
@@ -63,74 +63,129 @@ class PiperController(Worker):
         )
 
     def __init__(
-        self, 
-        can_name: str,
+        self,
+        can_name: str | list[str] | tuple[str, ...],
         enable_for_sampling: bool = True,
         set_can_ctrl_mode: bool = True
     ):
         """Initialize the Piper robot arm controller worker."""
         super().__init__()
         self._logger = get_logger()
-        self._can_name = can_name
+        self._can_names = self._normalize_can_names(can_name)
+        self._can_name = ",".join(self._can_names)
+        self._num_arms = len(self._can_names)
         self._state = PiperRobotState()
-        
-        self.driver = C_PiperInterface_V2(
-            can_name=can_name,
-            judge_flag=True,
-            can_auto_init=True,
-            logger_level=LogLevel.WARNING,
-        )
+        self.drivers: list[C_PiperInterface_V2] = []
         self._connected = False
         self._enabled = False
 
-        self.driver.ConnectPort(can_init=False, piper_init=True, start_thread=True)
+        for can in self._can_names:
+            driver = C_PiperInterface_V2(
+                can_name=can,
+                judge_flag=True,
+                can_auto_init=True,
+                logger_level=LogLevel.WARNING,
+            )
+            driver.ConnectPort(can_init=False, piper_init=True, start_thread=True)
+            self.drivers.append(driver)
         self._connected = True
 
         if set_can_ctrl_mode:
             # 0x01 is CAN control mode, 0x01 is Joint position, 30 is max speed
-            self.driver.ModeCtrl(ctrl_mode=0x01, move_mode=0x01, move_spd_rate_ctrl=30, is_mit_mode=0x00)
+            for driver in self.drivers:
+                driver.ModeCtrl(
+                    ctrl_mode=0x01,
+                    move_mode=0x01,
+                    move_spd_rate_ctrl=30,
+                    is_mit_mode=0x00,
+                )
 
         if enable_for_sampling:
-            self.driver.EnableArm(motor_num=7, enable_flag=0x02)
+            for driver in self.drivers:
+                driver.EnableArm(motor_num=7, enable_flag=0x02)
             self._enabled = True
 
-        action_dim = 7
-        
+        status = [
+            {
+                "can_name": can,
+                "connected": drv.get_connect_status(),
+                "is_ok": drv.isOk(),
+                "can_fps": drv.GetCanFps(),
+            }
+            for can, drv in zip(self._can_names, self.drivers, strict=True)
+        ]
+        self.log_info(
+            f"[Piper] num_arms={self._num_arms}, can_names={self._can_names}, status={status}"
+        )
 
-        self.log_info(f"[Piper] Connected: {self.driver.get_connect_status()}, isOk: {self.driver.isOk()}, CAN FPS: {self.driver.GetCanFps()}")
+    @staticmethod
+    def _normalize_can_names(
+        can_name: str | list[str] | tuple[str, ...],
+    ) -> list[str]:
+        """Normalize can_name input to one/two CAN names.
+
+        Accepts:
+        - "can0"
+        - "can0,can1"
+        - ["can0", "can1"]
+        """
+        if isinstance(can_name, str):
+            can_names = [x.strip() for x in can_name.split(",") if x.strip()]
+        else:
+            can_names = [str(x).strip() for x in can_name if str(x).strip()]
+        if not can_names:
+            raise ValueError("can_name is empty")
+        if len(can_names) > 2:
+            raise ValueError(
+                f"PiperController supports up to 2 arms, got {len(can_names)} CAN names: {can_names}"
+            )
+        return can_names
 
 
     def is_robot_up(self) -> bool:
         """Check if connection is ready."""
-        return self._connected and self.driver.isOk()
+        return self._connected and all(driver.isOk() for driver in self.drivers)
 
     def get_state(self) -> PiperRobotState:
         """Get the current state of the Piper robot in radians and meters."""
         DEG2RAD = math.pi / 180.0
 
-        jmsg = self.driver.GetArmJointMsgs()  
-        j = jmsg.joint_state  
-        # driver provides values in 0.001 deg
-        joint_raw_mdeg = [j.joint_1, j.joint_2, j.joint_3, j.joint_4, j.joint_5, j.joint_6]
-        joint_rad = np.array([v * 1e-3 * DEG2RAD for v in joint_raw_mdeg])
+        all_joint_rad = []
+        all_joint_vel_rads = []
+        all_gripper_pos = []
+        all_gripper_effort = []
+        for driver in self.drivers:
+            jmsg = driver.GetArmJointMsgs()
+            j = jmsg.joint_state
+            # driver provides values in 0.001 deg
+            joint_raw_mdeg = [
+                j.joint_1,
+                j.joint_2,
+                j.joint_3,
+                j.joint_4,
+                j.joint_5,
+                j.joint_6,
+            ]
+            all_joint_rad.append(np.array([v * 1e-3 * DEG2RAD for v in joint_raw_mdeg]))
 
-        hmsg = self.driver.GetArmHighSpdInfoMsgs()  
-        joint_vel_rads = []
-        for i in range(1, 7):
-            m = getattr(hmsg, f"motor_{i}")  
-            # 0.001 rad/s -> rad/s
-            joint_vel_rads.append(m.motor_speed * 1e-3)
+            hmsg = driver.GetArmHighSpdInfoMsgs()
+            joint_vel_rads = []
+            for i in range(1, 7):
+                m = getattr(hmsg, f"motor_{i}")
+                # 0.001 rad/s -> rad/s
+                joint_vel_rads.append(m.motor_speed * 1e-3)
+            all_joint_vel_rads.append(np.array(joint_vel_rads))
 
-        gmsg = self.driver.GetArmGripperMsgs()  
-        g = gmsg.gripper_state
+            gmsg = driver.GetArmGripperMsgs()
+            g = gmsg.gripper_state
+            all_gripper_pos.append(g.grippers_angle * 1e-3)
+            all_gripper_effort.append(g.grippers_effort * 1e-3)
 
-        stroke_mm = g.grippers_angle * 1e-3
-        effort_Nm = g.grippers_effort * 1e-3 
-
-        self._state.arm_joint_position = joint_rad
-        self._state.arm_joint_velocity = np.array(joint_vel_rads)
-        self._state.gripper_position = stroke_mm
-        self._state.gripper_effort = effort_Nm
+        self._state.arm_joint_position = np.concatenate(all_joint_rad, axis=0)
+        self._state.arm_joint_velocity = np.concatenate(all_joint_vel_rads, axis=0)
+        # Backward compatible scalar fields: keep the first arm's gripper values.
+        self._state.gripper_position = float(all_gripper_pos[0])
+        self._state.gripper_effort = float(all_gripper_effort[0])
 
         # Note: we need Forward Kinematics (FK) integration here if target task needs tcp_pose
         # Alternatively, if Piper SDK starts providing task-space (TCP) pos, we'd fill tcp_pose here.
@@ -147,21 +202,40 @@ class PiperController(Worker):
         """
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
         action = np.asarray(action, dtype=np.float64)
-        self.log_info(f"action before unnormalize: {action}")
-        
+        self._execute_single_arm(self.drivers[0], action, arm_idx=0)
+
+    def move_arm_dual(self, action: np.ndarray):
+        """Execute dual-arm action: 14 dims = left 7 + right 7."""
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
+        assert action.shape == (14,), (
+            f"Piper dual-arm action requires 14 dims (left7+right7), got {action.shape}"
+        )
+        if len(self.drivers) < 2:
+            raise RuntimeError(
+                "Dual-arm action provided, but only one CAN driver is configured. "
+                "Set can_name to 'can0,can1' (or equivalent two CAN names)."
+            )
+        self._execute_single_arm(self.drivers[0], action[:7], arm_idx=0)
+        self._execute_single_arm(self.drivers[1], action[7:], arm_idx=1)
+
+    def _execute_single_arm(
+        self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
+    ):
+        action = np.asarray(action, dtype=np.float64).reshape(-1)
+        self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
+
         start_time = time.time()
-        while not self.driver.EnablePiper():
-            # # Avoid hanging forever when arm cannot be enabled.
-            # if time.time() - start_time > 3.0:
-            #     raise RuntimeError(
-            #         "[Piper] EnablePiper timeout (>3s). Please check e-stop, motor enable state, "
-            #         "and CAN communication on robot controller."
-            #     )
+        while not driver.EnablePiper():
             time.sleep(0.01)
-            
+            if time.time() - start_time > 3.0:
+                raise RuntimeError(
+                    f"[Piper arm={arm_idx}] EnablePiper timeout (>3s). "
+                    "Please check e-stop, motor enable state, and CAN communication."
+                )
+
         # Hardcoded 1000 threshold mapping to CAN standard values
-        self.driver.GripperCtrl(0, 1000, 0x01, 0)
-        
+        # driver.GripperCtrl(0, 1000, 0x01, 0)
+
         # conversion from rad -> 0.001 deg
         # 1 rad = 180 / pi deg = 57.2957795 deg
         # 1 rad -> 57295.7795 * (0.001 deg)
@@ -173,35 +247,62 @@ class PiperController(Worker):
         joint_3 = round(action[3] * factor)
         joint_4 = round(action[4] * factor)
         joint_5 = round(action[5] * factor)
-        
-        # Using snippet's formula directly: `round(action[6]*70*1000)`
         joint_6 = round(action[6] * 70 * 1000)
+
+        driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
         
-        self.driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-        # self.driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
-        self.driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+        driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+        driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
 
     def clear_errors(self):
         # Implementation for clearing driver errors can be mapped here.
         pass
 
-    def reset_joint(self, reset_pos: list[float]):
+    def reset_joint(self, reset_pos: list[float] | np.ndarray):
+        """Unified reset for single/dual arm.
+
+        Supported input dimensions:
+        - Single arm: 6 joints or 7 (6 joints + gripper)
+        - Dual arm: 12 joints or 14 (left7 + right7)
         """
-        Reset joints to a specific position in radians.
-        """
-        assert len(reset_pos) == 6 or len(reset_pos) == 7, "Reset pos must be 6 joints (+ gripper optionally)."
-        # Extract 6-dim joints, pad with default gripper 0 if needed
-        action = np.zeros(7)
-        action[:6] = reset_pos[:6]
-        if len(reset_pos) == 7:
-            action[6] = reset_pos[6]
-            
-        self.move_arm(action)
-        time.sleep(1.0) # sleep for completion
+        reset = np.asarray(reset_pos, dtype=np.float64).reshape(-1)
+        dim = reset.shape[0]
+
+        # Single-arm reset path
+        if dim in (6, 7):
+            action = np.zeros(7, dtype=np.float64)
+            action[:6] = reset[:6]
+            if dim == 7:
+                action[6] = reset[6]
+            self.move_arm(action)
+            time.sleep(1.0)
+            return
+
+        # Dual-arm reset path
+        if dim in (12, 14):
+            action = np.zeros(14, dtype=np.float64)
+            if dim == 12:
+                action[:6] = reset[:6]
+                action[7:13] = reset[6:12]
+            else:
+                action[:] = reset
+            self.move_arm_dual(action)
+            time.sleep(1.0)
+            return
+
+        raise ValueError(
+            "Reset pos must be one of [6, 7, 12, 14] dims "
+            f"(got {dim})."
+        )
+
+    def reset_joint_dual(self, reset_pos: list[float] | np.ndarray):
+        """Backward-compatible alias to the unified ``reset_joint``."""
+        self.reset_joint(reset_pos)
     
     def disconnect(self):
         """Disconnect driver."""
         if self._connected:
-            self.driver.DisconnectPort()
+            for driver in self.drivers:
+                driver.DisconnectPort()
             self._connected = False
             self.log_info("[Piper] Disconnected port.")
