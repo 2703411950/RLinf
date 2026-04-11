@@ -253,16 +253,19 @@ class PiperEnv(gym.Env):
         else:
             reset_pose = self._reset_pose.copy()
 
-        if hasattr(self._controller, "reset_joint_dual"):
-            self._controller.reset_joint_dual(reset_pose).wait()
-        elif reset_pose.shape[0] == PIPER_SINGLE_ARM_JOINT_DIM:
-            self._controller.reset_joint(reset_pose).wait()
-        else:
-            # Backward compatibility: old controller only supports single-arm reset.
-            self._logger.warning(
-                "PiperController has no dual-arm reset API; fallback to first arm reset."
-            )
-            self._controller.reset_joint(reset_pose[:PIPER_SINGLE_ARM_JOINT_DIM]).wait()
+
+        self._controller.reset_joint(reset_pose).wait()
+        # if hasattr(self._controller, "reset_joint_dual"):
+        #     self._controller.reset_joint_dual(reset_pose).wait()
+        # elif reset_pose.shape[0] == PIPER_SINGLE_ARM_JOINT_DIM:
+        #     self._controller.reset_joint(reset_pose).wait()
+        # else:
+        #     # Backward compatibility: old controller only supports single-arm reset.
+        #     self._logger.warning(
+        #         "PiperController has no dual-arm reset API; fallback to first arm reset."
+        #     )
+        #     self._controller.reset_joint(reset_pose[:PIPER_SINGLE_ARM_JOINT_DIM]).wait()
+
 
     def _init_action_obs_spaces(self):
         # 14D：策略 [-1,1]^14（左臂 7 + 右臂 7）
@@ -387,7 +390,7 @@ class PiperEnv(gym.Env):
                 self._piper_state.arm_joint_velocity, PIPER_ARM_JOINT_DIM
             )
             gripper_position = self._expand_or_truncate(
-                np.array([self._piper_state.gripper_position]), PIPER_NUM_ARMS
+                self._piper_state.gripper_position, PIPER_NUM_ARMS
             )
             state = {
                 "joint_position": joint_position,

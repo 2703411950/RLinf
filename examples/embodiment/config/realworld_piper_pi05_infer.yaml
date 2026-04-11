@@ -60,15 +60,20 @@ runner:
   save_demos: true
   num_data_episodes: 100
   experiment_name: "piper-pi05-infer"
+  # 每次策略推理前保存 main + 两路 wrist 对应 PNG（默认目录见下；可设绝对路径）
+  save_inference_images: false
+  inference_images_dir: /data/cyy/RLinf/logs/inference_vis
 
 env:
   data_collection:
     enabled: false
   eval:
-    enable_camera_player: false
     env_type: realworld
     # Match Pi05 SFT stats/input shape: 7 dims = joint_position(6) + gripper_position(1)
     state_keys: ["joint_position", "gripper_position"]
+    # 必须写在 override_cfg 里才会传给 PiperRobotConfig；仅 env.eval 顶层无效。
+    override_cfg:
+      enable_camera_player: false
 
 actor:
   group_name: ActorGroup

@@ -183,15 +183,14 @@ class PiperController(Worker):
 
         self._state.arm_joint_position = np.concatenate(all_joint_rad, axis=0)
         self._state.arm_joint_velocity = np.concatenate(all_joint_vel_rads, axis=0)
-        # Backward compatible scalar fields: keep the first arm's gripper values.
-        self._state.gripper_position = float(all_gripper_pos[0])
-        self._state.gripper_effort = float(all_gripper_effort[0])
+        
+        self._state.gripper_position = np.array(all_gripper_pos)
+        self._state.gripper_effort = np.array(all_gripper_effort)
 
         # Note: we need Forward Kinematics (FK) integration here if target task needs tcp_pose
         # Alternatively, if Piper SDK starts providing task-space (TCP) pos, we'd fill tcp_pose here.
         # Currently leaving tcp_pose as exactly joint-driven or placeholder unless FK installed.
         # self._state.tcp_pose = ... 
-
         return self._state
 
     def move_arm(self, action: np.ndarray):
@@ -203,6 +202,7 @@ class PiperController(Worker):
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
         action = np.asarray(action, dtype=np.float64)
         self._execute_single_arm(self.drivers[0], action, arm_idx=0)
+        time.sleep(1)
 
     def move_arm_dual(self, action: np.ndarray):
         """Execute dual-arm action: 14 dims = left 7 + right 7."""
@@ -217,6 +217,7 @@ class PiperController(Worker):
             )
         self._execute_single_arm(self.drivers[0], action[:7], arm_idx=0)
         self._execute_single_arm(self.drivers[1], action[7:], arm_idx=1)
+        time.sleep(1)
 
     def _execute_single_arm(
         self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
@@ -251,8 +252,8 @@ class PiperController(Worker):
 
         driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
         
-        driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
-        driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+        # driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+        # driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
 
     def clear_errors(self):
         # Implementation for clearing driver errors can be mapped here.
@@ -295,9 +296,9 @@ class PiperController(Worker):
             f"(got {dim})."
         )
 
-    def reset_joint_dual(self, reset_pos: list[float] | np.ndarray):
-        """Backward-compatible alias to the unified ``reset_joint``."""
-        self.reset_joint(reset_pos)
+    # def reset_joint_dual(self, reset_pos: list[float] | np.ndarray):
+    #     """Backward-compatible alias to the unified ``reset_joint``."""
+    #     self.reset_joint(reset_pos)
     
     def disconnect(self):
         """Disconnect driver."""

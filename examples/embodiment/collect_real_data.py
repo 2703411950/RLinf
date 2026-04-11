@@ -17,10 +17,12 @@ from __future__ import annotations
 import copy
 import os
 import sys
+
 import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, open_dict
+from PIL import Image
 from tqdm import tqdm
 
 from rlinf.config import SupportedModel
@@ -114,6 +116,23 @@ class DataCollector(Worker):
         )
         self._policy: BasePolicy | None = None
         self._num_action_chunks = 1
+        self._save_inference_images = bool(
+            getattr(self.cfg.runner, "save_inference_images", False)
+        )
+        self._inference_images_dir: str | None = None
+        if self._save_inference_images:
+            custom_dir = getattr(self.cfg.runner, "inference_images_dir", None)
+            self._inference_images_dir = (
+                str(custom_dir)
+                if custom_dir
+                else os.path.join(
+                    self.cfg.runner.logger.log_path, "inference_vis"
+                )
+            )
+            os.makedirs(self._inference_images_dir, exist_ok=True)
+            self.log_info(
+                f"save_inference_images=True; writing PNGs under {self._inference_images_dir}"
+            )
         if self.use_policy_inference:
             self._init_policy_model()
 
@@ -203,7 +222,64 @@ class DataCollector(Worker):
                 out["wrist_images"] = (
                     mi.clone() if isinstance(mi, torch.Tensor) else torch.from_numpy(mi).to(device)
                 )
+
         return out
+
+    @staticmethod
+    def _image_tensor_to_rgb_hwc_uint8(t: torch.Tensor) -> np.ndarray:
+        """Convert one image tensor to RGB uint8 HWC (accepts CHW or HWC)."""
+        x = t.detach().cpu()
+        if x.dtype != torch.uint8:
+            x = torch.clamp(x, 0, 255).to(torch.uint8)
+        a = x.numpy()
+        if a.ndim != 3:
+            raise ValueError(f"Expected a single image (3D tensor), got shape {a.shape}")
+        # RealWorld / env 路径里有时是 [C,H,W]，有时是 [H,W,C]（例如直接来自 numpy）
+        if a.shape[0] == 3 and a.shape[-1] != 3:
+            return np.transpose(a, (1, 2, 0))
+        if a.shape[-1] == 3:
+            return np.ascontiguousarray(a)
+        raise ValueError(
+            f"Expected CHW (3,H,W) or HWC (H,W,3), got shape {a.shape}"
+        )
+
+    def _save_inference_step_images(
+        self, episode_idx: int, step_idx: int, env_obs: dict
+    ) -> None:
+        """Save main + two wrist views (policy wrist + 2nd extra cam when present)."""
+        if not self._save_inference_images or self._inference_images_dir is None:
+            return
+
+        prefix = os.path.join(
+            self._inference_images_dir,
+            f"ep{episode_idx:04d}_step{step_idx:05d}_",
+        )
+        main = env_obs["main_images"]
+        if main.dim() == 4:
+            main = main[0]
+        Image.fromarray(self._image_tensor_to_rgb_hwc_uint8(main)).save(
+            prefix + "main.png"
+        )
+
+        wrist0 = env_obs.get("wrist_images")
+        wrist0_hwc: np.ndarray | None = None
+        if wrist0 is not None:
+            w0 = wrist0[0] if wrist0.dim() == 4 else wrist0
+            wrist0_hwc = self._image_tensor_to_rgb_hwc_uint8(w0)
+            Image.fromarray(wrist0_hwc).save(prefix + "wrist0.png")
+
+        extra = env_obs.get("extra_view_images")
+        wrist1_hwc: np.ndarray | None = None
+        if extra is not None and extra.dim() >= 2:
+            e = extra[0] if extra.dim() == 5 else extra
+            if e.dim() == 4 and e.shape[0] >= 2:
+                wrist1_hwc = self._image_tensor_to_rgb_hwc_uint8(e[1])
+            elif e.dim() == 4 and e.shape[0] == 1:
+                wrist1_hwc = self._image_tensor_to_rgb_hwc_uint8(e[0])
+        if wrist1_hwc is None and wrist0_hwc is not None:
+            wrist1_hwc = wrist0_hwc.copy()
+        if wrist1_hwc is not None:
+            Image.fromarray(wrist1_hwc).save(prefix + "wrist1.png")
 
     def _process_obs(self, obs):
         """
@@ -265,16 +341,21 @@ class DataCollector(Worker):
             )
             current_obs_processed = self._process_obs(obs)
             episode_done = False
+            episode_idx = self.total_cnt
+            infer_step = 0
 
             while not episode_done:
                 env_obs = self._obs_for_policy(obs)
+                self._save_inference_step_images(episode_idx, infer_step, env_obs)
+                infer_step += 1
+
                 pred_kw = self._policy_predict_kwargs(predict_mode)
                 with torch.no_grad():
                     raw_actions, result = self._policy.predict_action_batch(
                         env_obs=env_obs, **pred_kw
                     )
 
-                self.log_info(f"raw_actions: {raw_actions}")
+                # self.log_info(f"raw_actions: {raw_actions}")
 
                 chunk_actions = prepare_actions(
                     raw_chunk_actions=raw_actions,
@@ -284,7 +365,7 @@ class DataCollector(Worker):
                     action_dim=self.cfg.actor.model.action_dim,
                 )
 
-                self.log_info(f"chunk_actions: {chunk_actions}")    
+                # self.log_info(f"chunk_actions: {chunk_actions}")    
                 if isinstance(chunk_actions, np.ndarray):
                     chunk_actions_t = torch.from_numpy(chunk_actions).float()
                 else:
