@@ -90,6 +90,7 @@ actor:
     num_q_heads: 10
     openpi:
       config_name: pi05_piper
+      lerobot_compat: true
 
 rollout:
   group_name: RolloutGroup

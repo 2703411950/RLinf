@@ -392,6 +392,8 @@ def get_openpi_config(
     if model_path is not None:
         config = _override_with_model_path(config, model_path)
     if data_kwargs is not None:
+        if config_name == "pi05_piper":
+            data_kwargs = coerce_piper_data_kwargs(data_kwargs)
         config = _override_with_data_kwargs(config, data_kwargs)
     if batch_size is not None:
         config = dataclasses.replace(config, batch_size=batch_size)
