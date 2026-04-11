@@ -55,8 +55,10 @@ env:
     no_gripper: false
     use_spacemouse: false
     max_episode_steps: 100
+    # 主相机（俯视/固定机位）：必须与 ``camera_serials`` 里「第三台」对应，即 wrist_3。
+    # 左/右腕为 wrist_1、wrist_2，经 RealWorldEnv 进入策略：main=本键；extra 两路 -> 左腕 + 右腕。
     main_image_key: "wrist_3"
-    
+
     override_cfg:
       is_dummy: false
       use_dense_reward: false

@@ -531,6 +531,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             outputs = self.sample_actions(
                 observation, mode=mode, compute_values=compute_values
             )
+            print(f"observation: {observation}")
 
             print(f"before output_transform actions: {outputs['actions']}")
             print(f"before output_transform actions shape: {outputs['actions'].shape}")
@@ -538,8 +539,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 {"actions": outputs["actions"], "state": observation.state}
             )["actions"]
 
-            # print(f"after output_transform actions: {actions}")
-            # print(f"after output_transform actions shape: {actions.shape}")
+            print(f"after output_transform actions: {actions}")
+            print(f"after output_transform actions shape: {actions.shape}")
 
             prev_logprobs = outputs["prev_logprobs"]
             prev_values = outputs["prev_values"]
