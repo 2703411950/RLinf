@@ -178,7 +178,11 @@ class PiperController(Worker):
 
             gmsg = driver.GetArmGripperMsgs()
             g = gmsg.gripper_state
-            all_gripper_pos.append(g.grippers_angle * 1e-3)
+            # Match the data collection pipeline in control_your_robot:
+            # gripper is recorded as normalized opening ratio in roughly [0, 1],
+            # using raw SDK angle (0.001 units) divided by the 70mm full range.
+            # all_gripper_pos.append(g.grippers_angle * 1e-3)
+            all_gripper_pos.append(g.grippers_angle * 1e-3 / 70.0)
             all_gripper_effort.append(g.grippers_effort * 1e-3)
 
         self._state.arm_joint_position = np.concatenate(all_joint_rad, axis=0)

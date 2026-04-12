@@ -67,6 +67,20 @@ class RealWorldEnv(gym.Env):
         self.state_keys = cfg.get("state_keys", None)
         if self.state_keys is not None:
             self.state_keys = [str(k) for k in self.state_keys]
+        # Optional fine-grained state selection/reordering. Each item is a dict:
+        #   {key: "joint_position", start: 0, end: 6}
+        # This is useful for dual-arm robots whose training state layout interleaves
+        # joint and gripper values per arm.
+        self.state_slices = cfg.get("state_slices", None)
+        if self.state_slices is not None:
+            self.state_slices = [
+                {
+                    "key": str(item["key"]),
+                    "start": int(item.get("start", 0)),
+                    "end": int(item["end"]) if item.get("end", None) is not None else None,
+                }
+                for item in self.state_slices
+            ]
 
         self._init_env()
 
@@ -226,20 +240,32 @@ class RealWorldEnv(gym.Env):
         obs = {}
 
         # Process states
-        full_states = []
         raw_states = OrderedDict(sorted(raw_obs["state"].items()))
-        if self.state_keys is None:
-            selected_keys = list(raw_states.keys())
-        else:
-            selected_keys = self.state_keys
-            missing = [k for k in selected_keys if k not in raw_states]
+        full_states = []
+        if self.state_slices is not None:
+            missing = [item["key"] for item in self.state_slices if item["key"] not in raw_states]
             if missing:
                 raise KeyError(
-                    f"Configured state_keys contain missing keys: {missing}. "
+                    f"Configured state_slices contain missing keys: {missing}. "
                     f"Available state keys: {list(raw_states.keys())}"
                 )
-        for key in selected_keys:
-            full_states.append(raw_states[key])
+            for item in self.state_slices:
+                value = np.asarray(raw_states[item["key"]])
+                state_slice = value[..., item["start"] : item["end"]]
+                full_states.append(state_slice)
+        else:
+            if self.state_keys is None:
+                selected_keys = list(raw_states.keys())
+            else:
+                selected_keys = self.state_keys
+                missing = [k for k in selected_keys if k not in raw_states]
+                if missing:
+                    raise KeyError(
+                        f"Configured state_keys contain missing keys: {missing}. "
+                        f"Available state keys: {list(raw_states.keys())}"
+                    )
+            for key in selected_keys:
+                full_states.append(raw_states[key])
         full_states = np.concatenate(full_states, axis=-1)
         obs["states"] = full_states
 
