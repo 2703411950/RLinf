@@ -83,7 +83,7 @@ actor:
     # synthetic_wrist_from_base: true
     env_action_dim: 14
   model:
-    model_path: /data/cyy/ckpts/adk111/pi05_unscrew_the_bottle_capv2_5000
+    model_path: /data/cyy/ckpts/adk111/pi05_unscrew_the_bottle_capv2_10000
     state_dim: 14
     action_dim: 14
     num_action_chunks: 50

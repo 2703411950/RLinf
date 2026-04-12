@@ -499,6 +499,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         compute_values=True,
         **kwargs,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
+        print(f"env_obs: {env_obs}")
         to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
         processed_obs = self.input_transform(
             to_process_obs, transpose=False
@@ -545,14 +546,14 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             )
             print(f"observation: {observation}")
 
-            print(f"before output_transform actions: {outputs['actions']}")
-            print(f"before output_transform actions shape: {outputs['actions'].shape}")
+            # print(f"before output_transform actions: {outputs['actions']}")
+            # print(f"before output_transform actions shape: {outputs['actions'].shape}")
             actions = self.output_transform(
                 {"actions": outputs["actions"], "state": observation.state}
             )["actions"]
 
-            print(f"after output_transform actions: {actions}")
-            print(f"after output_transform actions shape: {actions.shape}")
+            # print(f"after output_transform actions: {actions}")
+            # print(f"after output_transform actions shape: {actions.shape}")
 
             prev_logprobs = outputs["prev_logprobs"]
             prev_values = outputs["prev_values"]

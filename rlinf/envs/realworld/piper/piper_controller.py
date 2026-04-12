@@ -202,7 +202,7 @@ class PiperController(Worker):
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
         action = np.asarray(action, dtype=np.float64)
         self._execute_single_arm(self.drivers[0], action, arm_idx=0)
-        time.sleep(1)
+        time.sleep(1/30)
 
     def move_arm_dual(self, action: np.ndarray):
         """Execute dual-arm action: 14 dims = left 7 + right 7."""
@@ -217,13 +217,13 @@ class PiperController(Worker):
             )
         self._execute_single_arm(self.drivers[0], action[:7], arm_idx=0)
         self._execute_single_arm(self.drivers[1], action[7:], arm_idx=1)
-        time.sleep(1)
+        time.sleep(1/30)
 
     def _execute_single_arm(
         self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
     ):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
-        self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
+        # self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
 
         start_time = time.time()
         while not driver.EnablePiper():
