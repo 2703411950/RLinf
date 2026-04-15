@@ -65,6 +65,7 @@ class OpenPi0Config(Pi0Config):
     add_value_head: bool = False  # add value head for ppo
     value_after_vlm: bool = False  # value after vlm, pi05 mode
     value_vlm_mode: str = "mean_token"  # last_token, mean_token, first_token
+    lerobot_compat: bool = False  # enable LeRobot-compatible PI05 preprocessing/inference
 
     # ===== DSRL-specific parameters =====
     use_dsrl: bool = False  # Enable DSRL algorithm
@@ -234,6 +235,17 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
     def set_global_step(self, global_step):
         self.global_step = global_step
+
+    def _clone_cache_tree(self, value):
+        if torch.is_tensor(value):
+            return value.clone()
+        if isinstance(value, tuple):
+            return tuple(self._clone_cache_tree(item) for item in value)
+        if isinstance(value, list):
+            return [self._clone_cache_tree(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._clone_cache_tree(item) for key, item in value.items()}
+        return value
 
     def setup_wrappers(
         self,
@@ -487,6 +499,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         compute_values=True,
         **kwargs,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
+        print(f"env_obs: {env_obs}")
         to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
         processed_obs = self.input_transform(
             to_process_obs, transpose=False
@@ -533,14 +546,14 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             )
             print(f"observation: {observation}")
 
-            print(f"before output_transform actions: {outputs['actions']}")
-            print(f"before output_transform actions shape: {outputs['actions'].shape}")
+            # print(f"before output_transform actions: {outputs['actions']}")
+            # print(f"before output_transform actions shape: {outputs['actions'].shape}")
             actions = self.output_transform(
                 {"actions": outputs["actions"], "state": observation.state}
             )["actions"]
 
-            print(f"after output_transform actions: {actions}")
-            print(f"after output_transform actions shape: {actions.shape}")
+            # print(f"after output_transform actions: {actions}")
+            # print(f"after output_transform actions shape: {actions.shape}")
 
             prev_logprobs = outputs["prev_logprobs"]
             prev_values = outputs["prev_values"]
@@ -584,6 +597,11 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         compute_values=True,
     ) -> torch.Tensor:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
+        if self.config.lerobot_compat and mode == "eval":
+            return self._sample_actions_lerobot_compat(
+                observation, noise=noise, compute_values=compute_values
+            )
+
         bsize = observation.state.shape[0]
         device = observation.state.device
         num_steps = self.config.num_steps
@@ -698,6 +716,75 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             "chains": chains,
             "prev_logprobs": log_probs,
             "prev_values": values,
+            "denoise_inds": denoise_inds,
+        }
+
+    @torch.no_grad()
+    def _sample_actions_lerobot_compat(
+        self,
+        observation: _model.Observation,
+        noise=None,
+        compute_values=True,
+    ) -> dict[str, torch.Tensor]:
+        """Run deterministic ODE sampling to match LeRobot PI05 inference."""
+        del compute_values
+
+        bsize = observation.state.shape[0]
+        device = observation.state.device
+        num_steps = self.config.num_steps
+        if noise is None:
+            actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
+            noise = self.sample_noise(actions_shape, device)
+        else:
+            noise = noise.to(self.action_in_proj.weight.dtype)
+
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self._preprocess_observation(observation, train=False)
+        )
+
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+            images, img_masks, lang_tokens, lang_masks
+        )
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"
+
+        (_, _), past_key_values = self.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks_4d,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=True,
+        )
+
+        dt = -1.0 / num_steps
+        x_t = noise
+        chains = [x_t]
+        for step in range(num_steps):
+            time = 1.0 + step * dt
+            timestep = torch.full((bsize,), time, dtype=torch.float32, device=device)
+            suffix_out = self.get_suffix_out(
+                state,
+                prefix_pad_masks,
+                past_key_values,
+                x_t,
+                timestep,
+            )
+            v_t = self.action_out_proj(suffix_out)
+            x_t = x_t + dt * v_t
+            chains.append(x_t)
+
+        zero_log_probs = torch.zeros(
+            (bsize, self.config.action_chunk, self.config.action_env_dim), device=device
+        )
+        zero_values = torch.zeros((bsize, num_steps, 1), device=device)
+        denoise_inds = torch.full((bsize, num_steps), -1, device=device, dtype=torch.long)
+        return {
+            "actions": x_t,
+            "chains": torch.stack(chains, dim=1),
+            "prev_logprobs": zero_log_probs,
+            "prev_values": zero_values,
             "denoise_inds": denoise_inds,
         }
 
@@ -839,6 +926,9 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = (
             "eager"  # noqa: SLF001
         )
+
+        if self.config.lerobot_compat:
+            past_key_values = self._clone_cache_tree(past_key_values)
 
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,

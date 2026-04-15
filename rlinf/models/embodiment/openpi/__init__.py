@@ -13,10 +13,45 @@
 # limitations under the License.
 # openpi model configs
 
+import json
 import os
+from pathlib import Path
 
 import torch
 from omegaconf import DictConfig
+
+
+def _load_lerobot_checkpoint_config(checkpoint_dir: str) -> dict | None:
+    config_path = Path(checkpoint_dir) / "config.json"
+    if not config_path.exists():
+        return None
+    config = json.loads(config_path.read_text())
+    if config.get("policy_type") != "pi05" and config.get("type") != "pi05":
+        return None
+    return config
+
+
+def _load_lerobot_norm_stats(checkpoint_dir: str) -> dict | None:
+    from openpi.shared import normalize as _normalize
+    from safetensors import safe_open
+
+    stats_path = Path(checkpoint_dir) / "policy_preprocessor_step_3_normalizer_processor.safetensors"
+    if not stats_path.exists():
+        return None
+
+    def _read_stats(prefix: str) -> _normalize.NormStats:
+        with safe_open(stats_path, framework="pt", device="cpu") as handle:
+            return _normalize.NormStats(
+                mean=handle.get_tensor(f"{prefix}.mean").numpy(),
+                std=handle.get_tensor(f"{prefix}.std").numpy(),
+                q01=handle.get_tensor(f"{prefix}.q01").numpy(),
+                q99=handle.get_tensor(f"{prefix}.q99").numpy(),
+            )
+
+    return {
+        "state": _read_stats("observation.state"),
+        "actions": _read_stats("action"),
+    }
 
 
 def get_model(cfg: DictConfig, torch_dtype=None):
@@ -25,6 +60,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
     import openpi.shared.download as download
     import openpi.transforms as transforms
     import safetensors
+    from safetensors.torch import load_file
     from openpi.training import checkpoints as _checkpoints
 
     from rlinf.models.embodiment.openpi.dataconfig import get_openpi_config
@@ -51,6 +87,35 @@ def get_model(cfg: DictConfig, torch_dtype=None):
 
     # load model
     checkpoint_dir = download.maybe_download(str(cfg.model_path))
+    lerobot_checkpoint_config = None
+    if getattr(actor_model_config, "lerobot_compat", False):
+        lerobot_checkpoint_config = _load_lerobot_checkpoint_config(checkpoint_dir)
+        if lerobot_checkpoint_config is not None:
+            object.__setattr__(
+                actor_model_config, "action_horizon", lerobot_checkpoint_config["chunk_size"]
+            )
+            object.__setattr__(
+                actor_model_config, "action_chunk", lerobot_checkpoint_config["n_action_steps"]
+            )
+            object.__setattr__(
+                actor_model_config,
+                "action_env_dim",
+                lerobot_checkpoint_config["output_features"]["action"]["shape"][0],
+            )
+            object.__setattr__(
+                actor_model_config, "num_steps", lerobot_checkpoint_config["num_inference_steps"]
+            )
+            object.__setattr__(
+                actor_model_config,
+                "tokenizer_max_length",
+                lerobot_checkpoint_config["tokenizer_max_length"],
+            )
+            object.__setattr__(
+                actor_model_config, "max_state_dim", lerobot_checkpoint_config["max_state_dim"]
+            )
+            object.__setattr__(
+                actor_model_config, "max_action_dim", lerobot_checkpoint_config["max_action_dim"]
+            )
 
     # Check if this is a checkpoint directory (saved by FSDP)
     # Check for model_state_dict/full_weights.pt (direct checkpoint) or actor/model_state_dict/full_weights.pt (from runner)
@@ -83,7 +148,17 @@ def get_model(cfg: DictConfig, torch_dtype=None):
         if not weight_paths:
             weight_paths = [os.path.join(checkpoint_dir, "model.safetensors")]
         for weight_path in weight_paths:
-            safetensors.torch.load_model(model, weight_path, strict=False)
+            if getattr(actor_model_config, "lerobot_compat", False):
+                state_dict = load_file(weight_path)
+                remapped_state_dict = {}
+                for key, value in state_dict.items():
+                    if key.startswith("model."):
+                        remapped_state_dict[key[len("model.") :]] = value
+                    else:
+                        remapped_state_dict[key] = value
+                model.load_state_dict(remapped_state_dict, strict=False)
+            else:
+                safetensors.torch.load_model(model, weight_path, strict=False)
 
     model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
     # fsdp replace
@@ -98,10 +173,20 @@ def get_model(cfg: DictConfig, torch_dtype=None):
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+        try:
+            norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
+        except FileNotFoundError:
+            if not getattr(actor_model_config, "lerobot_compat", False):
+                raise
+            norm_stats = _load_lerobot_norm_stats(checkpoint_dir)
+            if norm_stats is None:
+                raise
     # wrappers
     repack_transforms = transforms.Group()
     default_prompt = None
+    post_normalize_input_transforms = getattr(
+        data_config, "post_normalize_input_transforms", ()
+    )
     model.setup_wrappers(
         transforms=[
             *repack_transforms.inputs,
@@ -110,6 +195,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
             transforms.Normalize(
                 norm_stats, use_quantiles=data_config.use_quantile_norm
             ),
+            *post_normalize_input_transforms,
             *data_config.model_transforms.inputs,
         ],
         output_transforms=[

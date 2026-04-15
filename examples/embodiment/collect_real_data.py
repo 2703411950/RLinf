@@ -355,7 +355,6 @@ class DataCollector(Worker):
                         env_obs=env_obs, **pred_kw
                     )
 
-                # self.log_info(f"raw_actions: {raw_actions}")
 
                 chunk_actions = prepare_actions(
                     raw_chunk_actions=raw_actions,
@@ -364,8 +363,7 @@ class DataCollector(Worker):
                     num_action_chunks=self.cfg.actor.model.num_action_chunks,
                     action_dim=self.cfg.actor.model.action_dim,
                 )
-
-                # self.log_info(f"chunk_actions: {chunk_actions}")    
+ 
                 if isinstance(chunk_actions, np.ndarray):
                     chunk_actions_t = torch.from_numpy(chunk_actions).float()
                 else:

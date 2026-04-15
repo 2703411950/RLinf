@@ -49,12 +49,12 @@ runner:
 env:
   group_name: "EnvGroup"
   eval:
-    ignore_terminations: false
+    ignore_terminations: true
+    max_episode_steps: 1000
     auto_reset: false
     # 不使用 GripperCloseEnv 裁剪到 6 维，保留完整 7 维动作（含夹爪）
     no_gripper: false
     use_spacemouse: false
-    max_episode_steps: 100
     # 主相机（俯视/固定机位）：必须与 ``camera_serials`` 里「第三台」对应，即 wrist_3。
     # 左/右腕为 wrist_1、wrist_2，经 RealWorldEnv 进入策略：main=本键；extra 两路 -> 左腕 + 右腕。
     main_image_key: "wrist_3"
@@ -62,11 +62,13 @@ env:
     override_cfg:
       is_dummy: false
       use_dense_reward: false
+      reset_joint_pose: [0.00925025,  0.00254818, -0.50740212, -0.04035201,  1.09226195,  0.06222099, 0.03588397, 0.00413643, -0.50949652, 0.01736603, 1.08695615, 0.05396558]
       target_joint_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
       reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
       # camera_serials: ["152122078363","151222071331"]
       camera_serials: ["213622075557", "152122078363", "151222071331"] # left right top
-
+      max_num_steps: 1000               # PiperEnv 截断阈值（也要同步拉高）
+      success_hold_steps: 999999       # 可选，避免成功判定太快触发
       # 在 Piper 环境里，camera_serials 会按顺序命名成：
       # 第1个 serial -> wrist_1
       # 第2个 serial -> wrist_2

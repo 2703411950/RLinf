@@ -69,8 +69,22 @@ env:
     enabled: false
   eval:
     env_type: realworld
-    # Match Pi05 SFT stats/input shape: 7 dims = joint_position(6) + gripper_position(1)
+    # Match Pi05 SFT state layout:
+    # left_joint(6) + left_gripper(1) + right_joint(6) + right_gripper(1)
     state_keys: ["joint_position", "gripper_position"]
+    state_slices:
+      - key: joint_position
+        start: 0
+        end: 6
+      - key: gripper_position
+        start: 0
+        end: 1
+      - key: joint_position
+        start: 6
+        end: 12
+      - key: gripper_position
+        start: 1
+        end: 2
     # 必须写在 override_cfg 里才会传给 PiperRobotConfig；仅 env.eval 顶层无效。
     override_cfg:
       enable_camera_player: false
@@ -83,13 +97,14 @@ actor:
     # synthetic_wrist_from_base: true
     env_action_dim: 14
   model:
-    model_path: /data/cyy/ckpts/adk111/pi05_unscrew_the_bottle_capv2_5000
+    model_path: /data/cyy/ckpts/adk111/pi05_unscrew_the_bottle_capv2_10000
     state_dim: 14
     action_dim: 14
     num_action_chunks: 50
     num_q_heads: 10
     openpi:
       config_name: pi05_piper
+      lerobot_compat: true
 
 rollout:
   group_name: RolloutGroup

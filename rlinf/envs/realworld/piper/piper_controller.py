@@ -178,7 +178,11 @@ class PiperController(Worker):
 
             gmsg = driver.GetArmGripperMsgs()
             g = gmsg.gripper_state
-            all_gripper_pos.append(g.grippers_angle * 1e-3)
+            # Match the data collection pipeline in control_your_robot:
+            # gripper is recorded as normalized opening ratio in roughly [0, 1],
+            # using raw SDK angle (0.001 units) divided by the 70mm full range.
+            # all_gripper_pos.append(g.grippers_angle * 1e-3)
+            all_gripper_pos.append(g.grippers_angle * 1e-3 / 70.0)
             all_gripper_effort.append(g.grippers_effort * 1e-3)
 
         self._state.arm_joint_position = np.concatenate(all_joint_rad, axis=0)
@@ -202,7 +206,7 @@ class PiperController(Worker):
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
         action = np.asarray(action, dtype=np.float64)
         self._execute_single_arm(self.drivers[0], action, arm_idx=0)
-        time.sleep(1)
+        time.sleep(1/30)
 
     def move_arm_dual(self, action: np.ndarray):
         """Execute dual-arm action: 14 dims = left 7 + right 7."""
@@ -217,13 +221,13 @@ class PiperController(Worker):
             )
         self._execute_single_arm(self.drivers[0], action[:7], arm_idx=0)
         self._execute_single_arm(self.drivers[1], action[7:], arm_idx=1)
-        time.sleep(1)
+        time.sleep(1/30)
 
     def _execute_single_arm(
         self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
     ):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
-        self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
+        # self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
 
         start_time = time.time()
         while not driver.EnablePiper():
