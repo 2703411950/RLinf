@@ -38,6 +38,8 @@ def get_model(cfg: DictConfig):
         from rlinf.models.embodiment.flow_policy import get_model
     elif model_type == SupportedModel.LINGBOTVLA:
         from rlinf.models.embodiment.lingbotvla import get_model
+    elif model_type == SupportedModel.MANTIS:
+        from rlinf.models.embodiment.mantis import get_model
     else:
         return None
 

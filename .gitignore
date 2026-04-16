@@ -26,4 +26,6 @@ datasets/
 ckpts/
 openpi/
 
-RoboTwin
+RoboTwin/
+mantis_env/
+pi05_env/

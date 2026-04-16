@@ -1,0 +1,74 @@
+defaults:
+  - realworld_piper_collect_data_base
+  - model/mantis@actor.model
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env:
+      node_group: "5090d"
+      placement: 0
+  node_groups:
+    - label: "5090d"
+      node_ranks: 0
+      hardware:
+        type: Piper
+        configs:
+          - can_name: "can0,can1"
+            node_rank: 0
+
+runner:
+  use_policy_inference: true
+  policy_predict_mode: eval
+  ckpt_path: null
+  experiment_name: "piper-mantis-dummy-infer"
+  default_task_prompt: "put object into bag"
+  num_data_episodes: 1
+  save_demos: false
+
+env:
+  data_collection:
+    enabled: false
+  eval:
+    env_type: realworld
+    state_keys: ["joint_position", "gripper_position"]
+    state_slices:
+      - key: joint_position
+        start: 0
+        end: 6
+      - key: gripper_position
+        start: 0
+        end: 1
+      - key: joint_position
+        start: 6
+        end: 12
+      - key: gripper_position
+        start: 1
+        end: 2
+    max_episode_steps: 1
+    override_cfg:
+      is_dummy: true
+      max_num_steps: 1
+
+actor:
+  model:
+    model_path: /data/cyy/ckpts/adk111/mantis_piper_put_object_into_bag_image_action_45000
+    state_dim: 14
+    action_dim: 14
+    num_action_chunks: 32
+    mantis:
+      unnorm_key: piper_put_object_into_bag
+      instruction: "put object into bag"
+
+rollout:
+  model:
+    model_path: ${actor.model.model_path}
+    precision: ${actor.model.precision}

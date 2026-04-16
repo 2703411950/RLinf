@@ -1,0 +1,24 @@
+model_type: "mantis"
+
+model_path: "/data/cyy/ckpts/adk111/mantis_piper_put_object_into_bag_image_action_45000"
+
+precision: "bf16"
+is_lora: false
+
+state_dim: 14
+action_dim: 14
+num_action_chunks: 32
+add_value_head: false
+
+mantis:
+  source_root: "/data/cyy/piper-vla"
+  backbone_path: "/data/cyy/control_your_robot/.cache/models/RynnBrain-2B"
+  diffusion_model_path: "/data/cyy/control_your_robot/.cache/models/Sana_600M_512px_diffusers_64channels"
+  norm_stats_path: "/data/cyy/control_your_robot/src/robot/policy/Mantis/mantis_models/norm_stats.json"
+  unnorm_key: "piper_put_object_into_bag"
+  instruction: "put object into bag"
+  primary_image_size: 256
+  auxiliary_image_size: 256
+  input_size: 16
+  enable_fast_action: true
+  ignore_mismatched_sizes: true
