@@ -242,7 +242,14 @@ class PiperController(Worker):
         self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
     ):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
-        self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
+        action_str = np.array2string(
+            action,
+            precision=4,
+            floatmode="fixed",
+        )
+        self.log_info(
+            f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action_str}"
+        )
 
         start_time = time.time()
         while not driver.EnablePiper():
@@ -276,11 +283,6 @@ class PiperController(Worker):
             joint_6 = round(action[6] * 70 * 1000)
 
         driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-        self.log_info(
-            "[Piper SDK target] "
-            f"arm={arm_idx}, joints_milli={[joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]}, "
-            f"gripper_milli={joint_6}, io_unit_mode={self._io_unit_mode}, dry_run={self._dry_run_commands}"
-        )
 
         if self._dry_run_commands:
             return

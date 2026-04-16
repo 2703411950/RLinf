@@ -56,12 +56,12 @@ runner:
   use_policy_inference: true
   policy_predict_mode: eval
   ckpt_path: null
-  default_task_prompt: "unscrew the bottle cap"
+  default_task_prompt: "right place cup on book left insert"
   save_demos: true
   num_data_episodes: 100
   experiment_name: "piper-pi05-infer"
   # 每次策略推理前保存 main + 两路 wrist 对应 PNG（默认目录见下；可设绝对路径）
-  save_inference_images: false
+  save_inference_images: true
   inference_images_dir: /data/cyy/RLinf/logs/inference_vis
 
 env:
@@ -92,8 +92,10 @@ env:
       step_frequency: 30.0
       # 是否使用evo-rl采数据
       io_unit_mode: evo_rl_unit
+      # 图像读取与 Evo-RL 对齐：保留原始 HWC RGB，不做中心裁剪/128 缩放
+      image_preprocess_mode: evorl
       # 是否 机械臂执行 命令
-      dry_run_commands: true
+      dry_run_commands: false
 
 actor:
   group_name: ActorGroup
@@ -101,6 +103,7 @@ actor:
   openpi_data:
     # override_use_quantile_norm: true
     # synthetic_wrist_from_base: true
+    align_evorl_observation: true
     env_action_dim: 14
   model:
     model_path: /data/cyy/ckpts/adk111/piper_pi05_SFT_right_place_cup_on_book_left_insert_30000

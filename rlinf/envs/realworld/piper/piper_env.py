@@ -55,6 +55,7 @@ class PiperRobotConfig:
     step_frequency: float = 10.0
     io_unit_mode: str = "radian_norm"
     dry_run_commands: bool = True
+    image_preprocess_mode: str = "legacy"
 
     target_joint_pose: np.ndarray = field(
         default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
@@ -272,6 +273,9 @@ class PiperEnv(gym.Env):
 
 
     def _init_action_obs_spaces(self):
+        frame_shape = (128, 128, 3)
+        if self.config.image_preprocess_mode == "evorl":
+            frame_shape = (480, 640, 3)
         # 14D：策略 [-1,1]^14（左臂 7 + 右臂 7）
         self.action_space = gym.spaces.Box(
             np.ones(PIPER_ACTION_DIM, dtype=np.float32) * -1,
@@ -296,7 +300,7 @@ class PiperEnv(gym.Env):
                 "frames": gym.spaces.Dict(
                     {
                         f"wrist_{k + 1}": gym.spaces.Box(
-                            0, 255, shape=(128, 128, 3), dtype=np.uint8
+                            0, 255, shape=frame_shape, dtype=np.uint8
                         )
                         for k in range(len(self.config.camera_serials))
                     }
@@ -330,20 +334,24 @@ class PiperEnv(gym.Env):
         for camera in self._cameras:
             try:
                 frame = camera.get_frame()
+                if self.config.image_preprocess_mode == "evorl":
+                    rgb = np.asarray(frame)[..., ::-1].copy()  # camera returns BGR8
+                    frames[camera._camera_info.name] = rgb
+                    display_frames[camera._camera_info.name] = frame
+                else:
+                    h, w, _ = frame.shape
+                    crop_size = min(h, w)
+                    start_x = (w - crop_size) // 2
+                    start_y = (h - crop_size) // 2
+                    cropped = frame[start_y : start_y + crop_size, start_x : start_x + crop_size]
 
-                h, w, _ = frame.shape
-                crop_size = min(h, w)
-                start_x = (w - crop_size) // 2
-                start_y = (h - crop_size) // 2
-                cropped = frame[start_y : start_y + crop_size, start_x : start_x + crop_size]
+                    reshape_size = self.observation_space["frames"][
+                        camera._camera_info.name
+                    ].shape[:2][::-1]
+                    resized = cv2.resize(cropped, reshape_size)
 
-                reshape_size = self.observation_space["frames"][
-                    camera._camera_info.name
-                ].shape[:2][::-1]
-                resized = cv2.resize(cropped, reshape_size)
-
-                frames[camera._camera_info.name] = resized[..., ::-1]  # RGB to BGR
-                display_frames[camera._camera_info.name] = resized
+                    frames[camera._camera_info.name] = resized[..., ::-1].copy()  # BGR -> RGB
+                    display_frames[camera._camera_info.name] = resized
             except queue.Empty:
                 self._logger.warning(f"Camera {camera._camera_info.name} failure. Reconnecting...")
                 time.sleep(2)

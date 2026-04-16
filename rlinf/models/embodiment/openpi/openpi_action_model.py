@@ -25,6 +25,7 @@ from openpi import transforms as _transforms
 from openpi.models import model as _model
 from openpi.models.pi0_config import Pi0Config
 from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
+from openpi.shared import image_tools as _image_tools
 
 from rlinf.models.embodiment.base_policy import BasePolicy, ForwardType
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
@@ -441,7 +442,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         observation = self.input_transform(forward_inputs, transpose=False)
         observation = _model.Observation.from_dict(observation)
         images, img_masks, lang_tokens, lang_masks, state = (
-            self._preprocess_observation(observation, train=False)
+            self._preprocess_observation_lerobot_compat(observation)
         )
         # transfer to device
         device = chains.device
@@ -519,6 +520,76 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                     ).contiguous()
         return processed_obs
 
+    def _preprocess_observation_lerobot_compat(
+        self, observation: _model.Observation
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Mirror Evo-RL PI05 image preprocessing for eval-time compatibility.
+
+        Evo-RL feeds float images in [0, 1] into ``resize_with_pad_torch`` and then
+        applies ``img = img * 2 - 1`` afterwards. Because the resize helper pads
+        float inputs with ``-1``, the padded region ends up as ``-3``. This is odd,
+        but it is the runtime behavior we need to match for bitwise-aligned traces.
+        """
+
+        images = []
+        img_masks = []
+        device = next(self.parameters()).device
+
+        image_resolution = getattr(self.config, "image_resolution", (224, 224))
+
+        for key, img in observation.images.items():
+            mask = observation.image_masks.get(
+                key,
+                torch.ones(
+                    observation.state.shape[:-1],
+                    dtype=torch.bool,
+                    device=observation.state.device,
+                ),
+            )
+            if img.device != device:
+                img = img.to(device)
+            if mask.device != device:
+                mask = mask.to(device)
+            if img.dtype != torch.float32:
+                img = img.to(torch.float32)
+
+            added_batch_dim = False
+            if img.dim() == 3:
+                img = img.unsqueeze(0)
+                added_batch_dim = True
+            is_channels_first = img.dim() == 4 and img.shape[1] == 3
+            if is_channels_first:
+                img = img.permute(0, 2, 3, 1)
+
+            # Observation.from_dict converted uint8 to [-1, 1]. Convert back to [0, 1]
+            # first so the following path matches Evo-RL's PI05Policy._preprocess_images.
+            img = img / 2.0 + 0.5
+
+            if img.shape[1:3] != tuple(image_resolution):
+                img = _image_tools.resize_with_pad_torch(
+                    img, *tuple(image_resolution)
+                )
+                if img.dim() == 3:
+                    img = img.unsqueeze(0)
+
+            img = img * 2.0 - 1.0
+
+            if is_channels_first:
+                if img.dim() == 4:
+                    img = img.permute(0, 3, 1, 2)
+                elif img.dim() == 3:
+                    img = img.permute(2, 0, 1)
+            images.append(img)
+            img_masks.append(mask.to(torch.bool))
+
+        return (
+            images,
+            img_masks,
+            observation.tokenized_prompt,
+            observation.tokenized_prompt_mask,
+            observation.state,
+        )
+
     def predict_action_batch(
         self,
         env_obs,
@@ -526,7 +597,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         compute_values=True,
         **kwargs,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
-        # print(f"env_obs: {env_obs}")
+        
         to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
         processed_obs = self.input_transform(
             to_process_obs, transpose=False
@@ -568,6 +639,10 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
 
         else:
             # Non-DSRL or eval mode
+            # PI05 / LeRobot compat still carries observation.state inside the Observation
+            # container, but the PI05 sampling path does not consume continuous state in
+            # the denoising model. State is only needed upstream for prompt discretization
+            # and for keeping the common Observation/output_transform interfaces intact.
             outputs = self.sample_actions(
                 observation, mode=mode, compute_values=compute_values
             )
@@ -639,7 +714,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             noise = noise.to(self.action_in_proj.weight.dtype)
 
         images, img_masks, lang_tokens, lang_masks, state = (
-            self._preprocess_observation(observation, train=False)
+            self._preprocess_observation_lerobot_compat(observation)
         )
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
@@ -765,7 +840,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             noise = noise.to(self.action_in_proj.weight.dtype)
 
         images, img_masks, lang_tokens, lang_masks, state = (
-            self._preprocess_observation(observation, train=False)
+            self._preprocess_observation_lerobot_compat(observation)
         )
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(

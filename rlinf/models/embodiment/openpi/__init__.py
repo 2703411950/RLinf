@@ -35,9 +35,12 @@ def _load_lerobot_norm_stats(checkpoint_dir: str) -> dict | None:
     from openpi.shared import normalize as _normalize
     from safetensors import safe_open
 
-    stats_path = Path(checkpoint_dir) / "policy_preprocessor_step_3_normalizer_processor.safetensors"
-    if not stats_path.exists():
+    stats_candidates = sorted(
+        Path(checkpoint_dir).glob("policy_preprocessor_step_*_normalizer_processor.safetensors")
+    )
+    if not stats_candidates:
         return None
+    stats_path = stats_candidates[-1]
 
     def _read_stats(prefix: str) -> _normalize.NormStats:
         with safe_open(stats_path, framework="pt", device="cpu") as handle:
@@ -68,6 +71,7 @@ def get_model(cfg: DictConfig, torch_dtype=None):
         OpenPi0Config,
         OpenPi0ForRLActionPrediction,
     )
+    from rlinf.models.embodiment.openpi.policies import piper_policy
 
     # config
     config_name = getattr(cfg.openpi, "config_name", None)
@@ -168,19 +172,14 @@ def get_model(cfg: DictConfig, torch_dtype=None):
         actor_train_config.assets_dirs, actor_model_config
     )
     norm_stats = None
+    if norm_stats is None and getattr(actor_model_config, "lerobot_compat", False):
+        norm_stats = _load_lerobot_norm_stats(checkpoint_dir)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
-        try:
-            norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
-        except FileNotFoundError:
-            if not getattr(actor_model_config, "lerobot_compat", False):
-                raise
-            norm_stats = _load_lerobot_norm_stats(checkpoint_dir)
-            if norm_stats is None:
-                raise
+        norm_stats = _checkpoints.load_norm_stats(checkpoint_dir, data_config.asset_id)
     # wrappers
     repack_transforms = transforms.Group()
     default_prompt = None
@@ -192,8 +191,15 @@ def get_model(cfg: DictConfig, torch_dtype=None):
             *repack_transforms.inputs,
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
-            transforms.Normalize(
-                norm_stats, use_quantiles=data_config.use_quantile_norm
+            (
+                piper_policy.NormalizeLikeLeRobot(
+                    norm_stats,
+                    use_quantiles=data_config.use_quantile_norm,
+                )
+                if getattr(actor_model_config, "lerobot_compat", False)
+                else transforms.Normalize(
+                    norm_stats, use_quantiles=data_config.use_quantile_norm
+                )
             ),
             *post_normalize_input_transforms,
             *data_config.model_transforms.inputs,

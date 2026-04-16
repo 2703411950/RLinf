@@ -267,7 +267,7 @@ class RealWorldEnv(gym.Env):
             for key in selected_keys:
                 full_states.append(raw_states[key])
         full_states = np.concatenate(full_states, axis=-1)
-        obs["states"] = full_states
+        obs["states"] = full_states.astype(np.float32, copy=False)
 
         # Process images
         if self.main_image_key not in raw_obs["frames"]:
