@@ -52,11 +52,17 @@ class PiperController(Worker):
         env_idx: int = 0,
         node_rank: int = 0,
         worker_rank: int = 0,
+        io_unit_mode: Literal["radian_norm", "evo_rl_unit"] = "radian_norm",
+        dry_run_commands: bool = True,
     ):
         """Launch a PiperController on the specified worker's node."""
         cluster = Cluster()
         placement = NodePlacementStrategy(node_ranks=[node_rank])
-        return PiperController.create_group(can_name).launch(
+        return PiperController.create_group(
+            can_name,
+            io_unit_mode=io_unit_mode,
+            dry_run_commands=dry_run_commands,
+        ).launch(
             cluster=cluster,
             placement_strategy=placement,
             name=f"PiperController-{worker_rank}-{env_idx}",
@@ -66,7 +72,9 @@ class PiperController(Worker):
         self,
         can_name: str | list[str] | tuple[str, ...],
         enable_for_sampling: bool = True,
-        set_can_ctrl_mode: bool = True
+        set_can_ctrl_mode: bool = True,
+        io_unit_mode: Literal["radian_norm", "evo_rl_unit"] = "radian_norm",
+        dry_run_commands: bool = True,
     ):
         """Initialize the Piper robot arm controller worker."""
         super().__init__()
@@ -74,6 +82,8 @@ class PiperController(Worker):
         self._can_names = self._normalize_can_names(can_name)
         self._can_name = ",".join(self._can_names)
         self._num_arms = len(self._can_names)
+        self._io_unit_mode = io_unit_mode
+        self._dry_run_commands = dry_run_commands
         self._state = PiperRobotState()
         self.drivers: list[C_PiperInterface_V2] = []
         self._connected = False
@@ -115,7 +125,8 @@ class PiperController(Worker):
             for can, drv in zip(self._can_names, self.drivers, strict=True)
         ]
         self.log_info(
-            f"[Piper] num_arms={self._num_arms}, can_names={self._can_names}, status={status}"
+            f"[Piper] num_arms={self._num_arms}, can_names={self._can_names}, "
+            f"io_unit_mode={self._io_unit_mode}, dry_run_commands={self._dry_run_commands}, status={status}"
         )
 
     @staticmethod
@@ -166,7 +177,10 @@ class PiperController(Worker):
                 j.joint_5,
                 j.joint_6,
             ]
-            all_joint_rad.append(np.array([v * 1e-3 * DEG2RAD for v in joint_raw_mdeg]))
+            if self._io_unit_mode == "evo_rl_unit":
+                all_joint_rad.append(np.array([v * 1e-3 for v in joint_raw_mdeg], dtype=np.float64))
+            else:
+                all_joint_rad.append(np.array([v * 1e-3 * DEG2RAD for v in joint_raw_mdeg], dtype=np.float64))
 
             hmsg = driver.GetArmHighSpdInfoMsgs()
             joint_vel_rads = []
@@ -178,11 +192,12 @@ class PiperController(Worker):
 
             gmsg = driver.GetArmGripperMsgs()
             g = gmsg.gripper_state
-            # Match the data collection pipeline in control_your_robot:
-            # gripper is recorded as normalized opening ratio in roughly [0, 1],
-            # using raw SDK angle (0.001 units) divided by the 70mm full range.
-            # all_gripper_pos.append(g.grippers_angle * 1e-3)
-            all_gripper_pos.append(g.grippers_angle * 1e-3 / 70.0)
+            if self._io_unit_mode == "evo_rl_unit":
+                # Match Evo-RL/LeRobot Piper follower: abs(milli_to_unit(grippers_angle)).
+                all_gripper_pos.append(abs(g.grippers_angle * 1e-3))
+            else:
+                # Match the control_your_robot normalized gripper ratio path.
+                all_gripper_pos.append(g.grippers_angle * 1e-3 / 70.0)
             all_gripper_effort.append(g.grippers_effort * 1e-3)
 
         self._state.arm_joint_position = np.concatenate(all_joint_rad, axis=0)
@@ -227,7 +242,7 @@ class PiperController(Worker):
         self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
     ):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
-        # self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
+        self.log_info(f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action}")
 
         start_time = time.time()
         while not driver.EnablePiper():
@@ -238,26 +253,41 @@ class PiperController(Worker):
                     "Please check e-stop, motor enable state, and CAN communication."
                 )
 
-        # Hardcoded 1000 threshold mapping to CAN standard values
-        # driver.GripperCtrl(0, 1000, 0x01, 0)
-
-        # conversion from rad -> 0.001 deg
-        # 1 rad = 180 / pi deg = 57.2957795 deg
-        # 1 rad -> 57295.7795 * (0.001 deg)
-        factor = 57295.7795
-            
-        joint_0 = round(action[0] * factor)
-        joint_1 = round(action[1] * factor)
-        joint_2 = round(action[2] * factor)
-        joint_3 = round(action[3] * factor)
-        joint_4 = round(action[4] * factor)
-        joint_5 = round(action[5] * factor)
-        joint_6 = round(action[6] * 70 * 1000)
+        if self._io_unit_mode == "evo_rl_unit":
+            # Match Evo-RL PiperFollower.send_action():
+            # upstream values are already in SDK upper-layer units (deg / gripper unit),
+            # and are converted to milli-units only at the final SDK boundary.
+            joint_0 = round(action[0] * 1000.0)
+            joint_1 = round(action[1] * 1000.0)
+            joint_2 = round(action[2] * 1000.0)
+            joint_3 = round(action[3] * 1000.0)
+            joint_4 = round(action[4] * 1000.0)
+            joint_5 = round(action[5] * 1000.0)
+            joint_6 = round(action[6] * 1000.0)
+        else:
+            # conversion from rad -> 0.001 deg
+            factor = 57295.7795
+            joint_0 = round(action[0] * factor)
+            joint_1 = round(action[1] * factor)
+            joint_2 = round(action[2] * factor)
+            joint_3 = round(action[3] * factor)
+            joint_4 = round(action[4] * factor)
+            joint_5 = round(action[5] * factor)
+            joint_6 = round(action[6] * 70 * 1000)
 
         driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
-        
-        # driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
-        # driver.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+        self.log_info(
+            "[Piper SDK target] "
+            f"arm={arm_idx}, joints_milli={[joint_0, joint_1, joint_2, joint_3, joint_4, joint_5]}, "
+            f"gripper_milli={joint_6}, io_unit_mode={self._io_unit_mode}, dry_run={self._dry_run_commands}"
+        )
+
+        if self._dry_run_commands:
+            return
+
+        driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
+        driver.GripperCtrl(joint_6, 1000, 0x01, 0)
+        time.sleep(1/30)
 
     def clear_errors(self):
         # Implementation for clearing driver errors can be mapped here.

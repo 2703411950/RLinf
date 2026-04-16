@@ -32,8 +32,8 @@ cluster:
 runner:
   task_type: embodied
   logger:
-    # collect_data.sh 会覆盖；若直接 python 跑，用 HOME 避免多机时 worker 无法写 /data/...
-    log_path: ${oc.env:HOME}/RLinf/collected_runs
+    # collect_data.sh 通常会覆盖；若直接 python 跑，默认也统一写到仓库下 logs。
+    log_path: /data/cyy/RLinf/logs
     project_name: rlinf
     experiment_name: "collect-data-piper"
     logger_backends: ["tensorboard"]

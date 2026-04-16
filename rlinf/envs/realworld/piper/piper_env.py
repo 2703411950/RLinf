@@ -53,6 +53,8 @@ class PiperRobotConfig:
     is_dummy: bool = False
     use_dense_reward: bool = False
     step_frequency: float = 10.0
+    io_unit_mode: str = "radian_norm"
+    dry_run_commands: bool = True
 
     target_joint_pose: np.ndarray = field(
         default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
@@ -149,6 +151,8 @@ class PiperEnv(gym.Env):
             env_idx=self.env_idx,
             node_rank=self.node_rank,
             worker_rank=self.env_worker_rank,
+            io_unit_mode=self.config.io_unit_mode,
+            dry_run_commands=self.config.dry_run_commands,
         )
 
     def _normalized_action_to_command(self, action: np.ndarray) -> np.ndarray:

@@ -189,7 +189,6 @@ def prepare_actions_for_piper(raw_chunk_actions) -> np.ndarray:
     Piper policy output is already in chunk format expected by RealWorldEnv/PiperEnv,
     so this adapter intentionally returns raw actions unchanged.
     """
-    print("do nothing")
     return raw_chunk_actions
 
 

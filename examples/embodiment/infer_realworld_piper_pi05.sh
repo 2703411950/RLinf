@@ -19,7 +19,7 @@ CONFIG_NAME="${1:-realworld_piper_pi05_infer}"
 shift || true
 
 echo "Using Python at $(command -v python)"
-LOG_DIR="${RLINF_COLLECT_LOG_DIR:-${HOME}/RLinf/logs/$(date +'%Y%m%d-%H:%M:%S')}-piper-infer"
+LOG_DIR="${RLINF_COLLECT_LOG_DIR:-${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')}-piper-infer"
 MEGA_LOG_FILE="${LOG_DIR}/infer_piper_pi05.log"
 mkdir -p "${LOG_DIR}"
 

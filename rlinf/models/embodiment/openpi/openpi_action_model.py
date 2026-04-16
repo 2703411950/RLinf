@@ -300,21 +300,48 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             inputs["tokenized_prompt_mask"] = obs["tokenized_prompt_mask"]
         return inputs
 
+    # def output_transform(self, outputs):
+    #     alias_outputs = dict(outputs)
+    #     if "state" in alias_outputs and "observation.state" not in alias_outputs:
+    #         alias_outputs["observation.state"] = alias_outputs["state"]
+    #     elif "observation.state" in alias_outputs and "state" not in alias_outputs:
+    #         alias_outputs["state"] = alias_outputs["observation.state"]
+    #     if "actions" in alias_outputs and "action" not in alias_outputs:
+    #         alias_outputs["action"] = alias_outputs["actions"]
+    #     elif "action" in alias_outputs and "actions" not in alias_outputs:
+    #         alias_outputs["actions"] = alias_outputs["action"]
+    #     # split & transform
+    #     batch_size = alias_outputs["actions"].shape[0]
+    #     transformed_samples = []
+    #     for i in range(batch_size):
+    #         sample = jax.tree.map(lambda x: np.asarray(x[i].detach().cpu()), alias_outputs)
+    #         sample = self._output_transform(sample)
+    #         if "actions" not in sample and "action" in sample:
+    #             sample["actions"] = sample["action"]
+    #         transformed_samples.append(sample)
+    #     # recombine
+    #     outputs = jax.tree.map(
+    #         lambda *torch_arr: torch.from_numpy(np.asarray(torch_arr).copy()),
+    #         *transformed_samples,
+    #     )
+    #     outputs["actions"] = outputs["actions"][:, : self.config.action_chunk]
+    #     return outputs
+
     def output_transform(self, outputs):
-        # split & transform
-        batch_size = outputs["actions"].shape[0]
-        transformed_samples = []
-        for i in range(batch_size):
-            sample = jax.tree.map(lambda x: np.asarray(x[i].detach().cpu()), outputs)
-            sample = self._output_transform(sample)
-            transformed_samples.append(sample)
-        # recombine
-        outputs = jax.tree.map(
-            lambda *torch_arr: torch.from_numpy(np.asarray(torch_arr).copy()),
-            *transformed_samples,
-        )
-        outputs["actions"] = outputs["actions"][:, : self.config.action_chunk]
-        return outputs
+            # split & transform
+            batch_size = outputs["actions"].shape[0]
+            transformed_samples = []
+            for i in range(batch_size):
+                sample = jax.tree.map(lambda x: np.asarray(x[i].detach().cpu()), outputs)
+                sample = self._output_transform(sample)
+                transformed_samples.append(sample)
+            # recombine
+            outputs = jax.tree.map(
+                lambda *torch_arr: torch.from_numpy(np.asarray(torch_arr).copy()),
+                *transformed_samples,
+            )
+            outputs["actions"] = outputs["actions"][:, : self.config.action_chunk]
+            return outputs
 
     def forward(self, forward_type=ForwardType.DEFAULT, **kwargs):
         if forward_type == ForwardType.SFT:
@@ -499,7 +526,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         compute_values=True,
         **kwargs,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
-        print(f"env_obs: {env_obs}")
+        # print(f"env_obs: {env_obs}")
         to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
         processed_obs = self.input_transform(
             to_process_obs, transpose=False
@@ -544,7 +571,6 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             outputs = self.sample_actions(
                 observation, mode=mode, compute_values=compute_values
             )
-            print(f"observation: {observation}")
 
             # print(f"before output_transform actions: {outputs['actions']}")
             # print(f"before output_transform actions shape: {outputs['actions'].shape}")

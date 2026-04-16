@@ -88,6 +88,12 @@ env:
     # 必须写在 override_cfg 里才会传给 PiperRobotConfig；仅 env.eval 顶层无效。
     override_cfg:
       enable_camera_player: false
+      # 与 SFT 一致
+      step_frequency: 30.0
+      # 是否使用evo-rl采数据
+      io_unit_mode: evo_rl_unit
+      # 是否 机械臂执行 命令
+      dry_run_commands: true
 
 actor:
   group_name: ActorGroup
@@ -97,7 +103,7 @@ actor:
     # synthetic_wrist_from_base: true
     env_action_dim: 14
   model:
-    model_path: /data/cyy/ckpts/adk111/pi05_unscrew_the_bottle_capv2_10000
+    model_path: /data/cyy/ckpts/adk111/piper_pi05_SFT_right_place_cup_on_book_left_insert_30000
     state_dim: 14
     action_dim: 14
     num_action_chunks: 50
