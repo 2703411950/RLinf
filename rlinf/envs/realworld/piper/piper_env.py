@@ -56,6 +56,11 @@ class PiperRobotConfig:
     io_unit_mode: str = "radian_norm"
     dry_run_commands: bool = True
     image_preprocess_mode: str = "legacy"
+    speed_ratio: int = 5
+    high_follow: bool = True
+    mode_refresh_interval_s: float = 1.0
+    reset_duration_s: float = 3.0
+    reset_interpolation_steps: int = 90
 
     target_joint_pose: np.ndarray = field(
         default_factory=lambda: np.zeros(PIPER_ARM_JOINT_DIM, dtype=np.float64)
@@ -154,6 +159,11 @@ class PiperEnv(gym.Env):
             worker_rank=self.env_worker_rank,
             io_unit_mode=self.config.io_unit_mode,
             dry_run_commands=self.config.dry_run_commands,
+            speed_ratio=self.config.speed_ratio,
+            high_follow=self.config.high_follow,
+            mode_refresh_interval_s=self.config.mode_refresh_interval_s,
+            reset_duration_s=self.config.reset_duration_s,
+            reset_interpolation_steps=self.config.reset_interpolation_steps,
         )
 
     def _normalized_action_to_command(self, action: np.ndarray) -> np.ndarray:

@@ -54,6 +54,11 @@ class PiperController(Worker):
         worker_rank: int = 0,
         io_unit_mode: Literal["radian_norm", "evo_rl_unit"] = "radian_norm",
         dry_run_commands: bool = True,
+        speed_ratio: int = 5,
+        high_follow: bool = True,
+        mode_refresh_interval_s: float = 1.0,
+        reset_duration_s: float = 3.0,
+        reset_interpolation_steps: int = 90,
     ):
         """Launch a PiperController on the specified worker's node."""
         cluster = Cluster()
@@ -62,6 +67,11 @@ class PiperController(Worker):
             can_name,
             io_unit_mode=io_unit_mode,
             dry_run_commands=dry_run_commands,
+            speed_ratio=speed_ratio,
+            high_follow=high_follow,
+            mode_refresh_interval_s=mode_refresh_interval_s,
+            reset_duration_s=reset_duration_s,
+            reset_interpolation_steps=reset_interpolation_steps,
         ).launch(
             cluster=cluster,
             placement_strategy=placement,
@@ -75,6 +85,11 @@ class PiperController(Worker):
         set_can_ctrl_mode: bool = True,
         io_unit_mode: Literal["radian_norm", "evo_rl_unit"] = "radian_norm",
         dry_run_commands: bool = True,
+        speed_ratio: int = 5,
+        high_follow: bool = True,
+        mode_refresh_interval_s: float = 1.0,
+        reset_duration_s: float = 3.0,
+        reset_interpolation_steps: int = 90,
     ):
         """Initialize the Piper robot arm controller worker."""
         super().__init__()
@@ -84,10 +99,16 @@ class PiperController(Worker):
         self._num_arms = len(self._can_names)
         self._io_unit_mode = io_unit_mode
         self._dry_run_commands = dry_run_commands
+        self._speed_ratio = int(speed_ratio)
+        self._high_follow = bool(high_follow)
+        self._mode_refresh_interval_s = float(mode_refresh_interval_s)
+        self._reset_duration_s = float(reset_duration_s)
+        self._reset_interpolation_steps = int(reset_interpolation_steps)
         self._state = PiperRobotState()
         self.drivers: list[C_PiperInterface_V2] = []
         self._connected = False
         self._enabled = False
+        self._last_mode_refresh_t = 0.0
 
         for can in self._can_names:
             driver = C_PiperInterface_V2(
@@ -100,20 +121,13 @@ class PiperController(Worker):
             self.drivers.append(driver)
         self._connected = True
 
-        if set_can_ctrl_mode:
-            # 0x01 is CAN control mode, 0x01 is Joint position, 30 is max speed
-            for driver in self.drivers:
-                driver.ModeCtrl(
-                    ctrl_mode=0x01,
-                    move_mode=0x01,
-                    move_spd_rate_ctrl=30,
-                    is_mit_mode=0x00,
-                )
-
         if enable_for_sampling:
             for driver in self.drivers:
                 driver.EnableArm(motor_num=7, enable_flag=0x02)
             self._enabled = True
+
+        if set_can_ctrl_mode:
+            self._send_motion_mode()
 
         status = [
             {
@@ -126,8 +140,27 @@ class PiperController(Worker):
         ]
         self.log_info(
             f"[Piper] num_arms={self._num_arms}, can_names={self._can_names}, "
-            f"io_unit_mode={self._io_unit_mode}, dry_run_commands={self._dry_run_commands}, status={status}"
+            f"io_unit_mode={self._io_unit_mode}, dry_run_commands={self._dry_run_commands}, "
+            f"speed_ratio={self._speed_ratio}, high_follow={self._high_follow}, "
+            f"mode_refresh_interval_s={self._mode_refresh_interval_s}, "
+            f"reset_duration_s={self._reset_duration_s}, "
+            f"reset_interpolation_steps={self._reset_interpolation_steps}, status={status}"
         )
+
+    def _send_motion_mode(self) -> None:
+        """Send Piper motion mode, matching Evo-RL's follower configuration."""
+        mit_mode = 0xAD if self._high_follow else 0x00
+        for driver in self.drivers:
+            driver.MotionCtrl_2(0x01, 0x01, self._speed_ratio, mit_mode)
+        self._last_mode_refresh_t = time.monotonic()
+
+    def _refresh_motion_mode_if_needed(self) -> None:
+        interval_s = self._mode_refresh_interval_s
+        if interval_s <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_mode_refresh_t >= interval_s:
+            self._send_motion_mode()
 
     @staticmethod
     def _normalize_can_names(
@@ -220,7 +253,7 @@ class PiperController(Worker):
         """
         assert len(action) == 7, f"Piper action requires 7 dims (6 joints + gripper), got {len(action)}"
         action = np.asarray(action, dtype=np.float64)
-        self._execute_single_arm(self.drivers[0], action, arm_idx=0)
+        self._execute_single_arm(self.drivers[0], action, arm_idx=0, sleep_after=False)
         time.sleep(1/30)
 
     def move_arm_dual(self, action: np.ndarray):
@@ -234,12 +267,16 @@ class PiperController(Worker):
                 "Dual-arm action provided, but only one CAN driver is configured. "
                 "Set can_name to 'can0,can1' (or equivalent two CAN names)."
             )
-        self._execute_single_arm(self.drivers[0], action[:7], arm_idx=0)
-        self._execute_single_arm(self.drivers[1], action[7:], arm_idx=1)
-        time.sleep(1/30)
+        self._execute_single_arm(self.drivers[0], action[:7], arm_idx=0, sleep_after=False)
+        self._execute_single_arm(self.drivers[1], action[7:], arm_idx=1, sleep_after=False)
+        # time.sleep(1/30)
 
     def _execute_single_arm(
-        self, driver: C_PiperInterface_V2, action: np.ndarray, arm_idx: int
+        self,
+        driver: C_PiperInterface_V2,
+        action: np.ndarray,
+        arm_idx: int,
+        sleep_after: bool = True,
     ):
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         action_str = np.array2string(
@@ -247,9 +284,9 @@ class PiperController(Worker):
             precision=4,
             floatmode="fixed",
         )
-        self.log_info(
-            f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action_str}"
-        )
+        # self.log_info(
+        #     f"piper execute action (arm={arm_idx}, can={self._can_names[arm_idx]}): {action_str}"
+        # )
 
         start_time = time.time()
         while not driver.EnablePiper():
@@ -282,14 +319,72 @@ class PiperController(Worker):
             joint_5 = round(action[5] * factor)
             joint_6 = round(action[6] * 70 * 1000)
 
-        driver.MotionCtrl_2(0x01, 0x01, 100, 0x00)
+        self._refresh_motion_mode_if_needed()
 
         if self._dry_run_commands:
             return
 
         driver.JointCtrl(joint_0, joint_1, joint_2, joint_3, joint_4, joint_5)
         driver.GripperCtrl(joint_6, 1000, 0x01, 0)
-        time.sleep(1/30)
+        if sleep_after:
+            time.sleep(1/30)
+
+    def _current_action_vector(self) -> np.ndarray:
+        """Read current dual-arm joint+gripper state in the controller's action units."""
+        state = self.get_state()
+        current = np.zeros(14, dtype=np.float64)
+        current[:6] = np.asarray(state.arm_joint_position[:6], dtype=np.float64)
+        current[6] = float(state.gripper_position[0])
+        if self._num_arms >= 2:
+            current[7:13] = np.asarray(state.arm_joint_position[6:12], dtype=np.float64)
+            current[13] = float(state.gripper_position[1])
+        return current
+
+    def _expand_reset_target(self, reset: np.ndarray) -> np.ndarray:
+        """Normalize reset input to a full target vector while preserving omitted grippers."""
+        current = self._current_action_vector()
+        dim = reset.shape[0]
+        target = current.copy()
+        if dim == 6:
+            target[:6] = reset[:6]
+            return target[:7]
+        if dim == 7:
+            target[:7] = reset[:7]
+            return target[:7]
+        if dim == 12:
+            target[:6] = reset[:6]
+            target[7:13] = reset[6:12]
+            return target
+        if dim == 14:
+            target[:] = reset
+            return target
+        raise ValueError(
+            "Reset pos must be one of [6, 7, 12, 14] dims "
+            f"(got {dim})."
+        )
+
+    def _interpolate_reset(self, target: np.ndarray) -> None:
+        """Move to reset pose with small steps instead of a single large jump."""
+        start = self._current_action_vector()
+        if target.shape == (7,):
+            start = start[:7]
+
+        steps = max(self._reset_interpolation_steps, 1)
+        duration_s = max(self._reset_duration_s, 0.0)
+        sleep_s = duration_s / steps if steps > 0 else 0.0
+
+        for idx in range(1, steps + 1):
+            alpha = idx / steps
+            cmd = start + (target - start) * alpha
+            tick_start = time.perf_counter()
+            if target.shape == (7,):
+                self._execute_single_arm(self.drivers[0], cmd, arm_idx=0, sleep_after=False)
+            else:
+                self._execute_single_arm(self.drivers[0], cmd[:7], arm_idx=0, sleep_after=False)
+                self._execute_single_arm(self.drivers[1], cmd[7:], arm_idx=1, sleep_after=False)
+            if sleep_s > 0:
+                elapsed = time.perf_counter() - tick_start
+                time.sleep(max(0.0, sleep_s - elapsed))
 
     def clear_errors(self):
         # Implementation for clearing driver errors can be mapped here.
@@ -303,34 +398,8 @@ class PiperController(Worker):
         - Dual arm: 12 joints or 14 (left7 + right7)
         """
         reset = np.asarray(reset_pos, dtype=np.float64).reshape(-1)
-        dim = reset.shape[0]
-
-        # Single-arm reset path
-        if dim in (6, 7):
-            action = np.zeros(7, dtype=np.float64)
-            action[:6] = reset[:6]
-            if dim == 7:
-                action[6] = reset[6]
-            self.move_arm(action)
-            time.sleep(1.0)
-            return
-
-        # Dual-arm reset path
-        if dim in (12, 14):
-            action = np.zeros(14, dtype=np.float64)
-            if dim == 12:
-                action[:6] = reset[:6]
-                action[7:13] = reset[6:12]
-            else:
-                action[:] = reset
-            self.move_arm_dual(action)
-            time.sleep(1.0)
-            return
-
-        raise ValueError(
-            "Reset pos must be one of [6, 7, 12, 14] dims "
-            f"(got {dim})."
-        )
+        target = self._expand_reset_target(reset)
+        self._interpolate_reset(target)
 
     # def reset_joint_dual(self, reset_pos: list[float] | np.ndarray):
     #     """Backward-compatible alias to the unified ``reset_joint``."""

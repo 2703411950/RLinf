@@ -57,8 +57,9 @@ runner:
   policy_predict_mode: eval
   ckpt_path: null
   default_task_prompt: "right place cup on book left insert"
+
   save_demos: true
-  num_data_episodes: 100
+  num_data_episodes: 10
   experiment_name: "piper-pi05-infer"
   # 每次策略推理前保存 main + 两路 wrist 对应 PNG（默认目录见下；可设绝对路径）
   save_inference_images: true
@@ -92,6 +93,18 @@ env:
       step_frequency: 30.0
       # 是否使用evo-rl采数据
       io_unit_mode: evo_rl_unit
+      # 与 Evo-RL PiperFollower 默认 motion mode 对齐。
+      speed_ratio: 20
+      high_follow: true
+      mode_refresh_interval_s: 1.0
+
+      # 达到目标位置后保持的步数
+      success_hold_steps: 5
+
+      # reset 走插值回位，避免单次大跳变，默认平滑reset
+      reset_duration_s: 3.0
+      reset_interpolation_steps: 90
+
       # 图像读取与 Evo-RL 对齐：保留原始 HWC RGB，不做中心裁剪/128 缩放
       image_preprocess_mode: evorl
       # 是否 机械臂执行 命令
