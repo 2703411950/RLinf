@@ -80,6 +80,16 @@ class OpenPi0Config(Pi0Config):
         default_factory=lambda: (128, 128, 128)
     )  # Hidden dims for Q-head and GaussianPolicy
 
+    # ===== Non-DSRL SAC-specific parameters =====
+    use_non_dsrl_sac: bool = False  # Enable env-action SAC path for PI05 replay data
+    non_dsrl_state_dim: int = 14  # Flattened state dim used by the actor/Q side branch
+    non_dsrl_num_images: int = 3  # main + two wrist views
+    non_dsrl_image_size: int = 64  # Side-branch image encoder resolution
+    non_dsrl_image_latent_dim: int = 64
+    non_dsrl_state_latent_dim: int = 64
+    non_dsrl_hidden_dims: tuple = field(default_factory=lambda: (256, 256, 256))
+    non_dsrl_logstd_range: tuple = field(default_factory=lambda: (-5.0, 2.0))
+
 
 class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
     """
@@ -228,6 +238,63 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 num_q_heads=self.config.dsrl_num_q_heads,
                 output_dim=1,
             ).to(dtype=_dsrl_dtype)
+        elif self.config.use_non_dsrl_sac:
+            from rlinf.models.embodiment.modules.compact_encoders import (
+                CompactMultiQHead,
+                CompactStateEncoder,
+                LightweightImageEncoder64,
+            )
+
+            non_dsrl_dtype = torch.bfloat16
+            actor_input_dim = (
+                self.config.non_dsrl_state_latent_dim
+                + self.config.non_dsrl_image_latent_dim
+            )
+            flattened_action_dim = (
+                self.config.action_horizon * self.config.action_env_dim
+            )
+
+            self.actor_image_encoder = LightweightImageEncoder64(
+                num_images=self.config.non_dsrl_num_images,
+                latent_dim=self.config.non_dsrl_image_latent_dim,
+                image_size=self.config.non_dsrl_image_size,
+            ).to(dtype=non_dsrl_dtype)
+            self.actor_state_encoder = CompactStateEncoder(
+                state_dim=self.config.non_dsrl_state_dim,
+                hidden_dim=self.config.non_dsrl_state_latent_dim,
+            ).to(dtype=non_dsrl_dtype)
+            self.critic_image_encoder = LightweightImageEncoder64(
+                num_images=self.config.non_dsrl_num_images,
+                latent_dim=self.config.non_dsrl_image_latent_dim,
+                image_size=self.config.non_dsrl_image_size,
+            ).to(dtype=non_dsrl_dtype)
+            self.critic_state_encoder = CompactStateEncoder(
+                state_dim=self.config.non_dsrl_state_dim,
+                hidden_dim=self.config.non_dsrl_state_latent_dim,
+            ).to(dtype=non_dsrl_dtype)
+
+            actor_layers: list[torch.nn.Module] = []
+            in_dim = actor_input_dim
+            for out_dim in self.config.non_dsrl_hidden_dims:
+                actor_layers.extend(
+                    [torch.nn.Linear(in_dim, out_dim), torch.nn.LayerNorm(out_dim), torch.nn.ReLU()]
+                )
+                in_dim = out_dim
+            self.actor_trunk = torch.nn.Sequential(*actor_layers).to(dtype=non_dsrl_dtype)
+            self.actor_mean = torch.nn.Linear(in_dim, flattened_action_dim).to(
+                dtype=non_dsrl_dtype
+            )
+            self.actor_logstd = torch.nn.Linear(in_dim, flattened_action_dim).to(
+                dtype=non_dsrl_dtype
+            )
+            self.q_head = CompactMultiQHead(
+                state_dim=self.config.non_dsrl_state_latent_dim,
+                image_dim=self.config.non_dsrl_image_latent_dim,
+                action_dim=flattened_action_dim,
+                hidden_dims=self.config.non_dsrl_hidden_dims,
+                num_q_heads=self.config.dsrl_num_q_heads,
+                output_dim=1,
+            ).to(dtype=non_dsrl_dtype)
 
         for name, module in self.named_modules():
             # Set _fsdp_wrap_name to the last part of the path (e.g., "model.action_in_proj" -> "action_in_proj")
@@ -1260,6 +1327,14 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             logprobs: [B] - log probabilities
             dist_params: (mean, std) or None - distribution parameters for logging
         """
+        if self.config.use_non_dsrl_sac:
+            return self._sac_forward_non_dsrl(
+                obs=obs,
+                data=data,
+                train=train,
+                return_dist_params=return_dist_params,
+                **kwargs,
+            )
         if not self.config.use_dsrl:
             raise ValueError("sac_forward called but use_dsrl=False")
 
@@ -1334,6 +1409,15 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         Returns:
             q_values: [B, num_q_heads] - Q-values from all Q-networks.
         """
+        if self.config.use_non_dsrl_sac:
+            return self._sac_q_forward_non_dsrl(
+                obs=obs,
+                data=data,
+                actions=actions,
+                detach_encoder=detach_encoder,
+                train=train,
+                **kwargs,
+            )
         if not self.config.use_dsrl:
             raise ValueError("sac_q_forward called but use_dsrl=False")
 
@@ -1382,6 +1466,169 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         # Compute Q values
         q_values = self.q_head(state_features, image_features, actions)
 
+        return q_values
+
+    def _normalize_sac_obs(self, obs, data=None, kwargs=None):
+        """Normalize SAC observation input to a dict."""
+        if obs is None:
+            obs = data.get("obs", data) if data is not None else kwargs.get("obs", {})
+        if not isinstance(obs, dict):
+            raise ValueError(f"Expected dict obs for SAC forward, got {type(obs).__name__}.")
+        return obs
+
+    def _select_wrist_source(self, obs):
+        """Select wrist image source from replay/env observation dict."""
+        if "wrist_images" in obs and obs["wrist_images"] is not None:
+            return obs["wrist_images"]
+        if "extra_view_images" in obs and obs["extra_view_images"] is not None:
+            return obs["extra_view_images"]
+        return None
+
+    def _stack_non_dsrl_images(self, main_images, wrist_images):
+        """Build a fixed-size multi-view image tensor for non-DSRL SAC."""
+        import torch.nn.functional as F
+
+        if main_images.dim() == 5 and main_images.shape[1] == 1:
+            main_images = main_images[:, 0]
+        if main_images.shape[-1] == 3:
+            main_images = main_images.permute(0, 3, 1, 2)
+
+        views = [main_images]
+        if wrist_images is not None:
+            if wrist_images.dim() == 6 and wrist_images.shape[1] == 1:
+                wrist_images = wrist_images[:, 0]
+            if wrist_images.dim() == 4:
+                wrist_images = wrist_images.unsqueeze(1)
+            if wrist_images.dim() != 5:
+                raise ValueError(
+                    f"Expected wrist images with 5 dims after squeeze, got {tuple(wrist_images.shape)}."
+                )
+            if wrist_images.shape[-1] == 3:
+                wrist_images = wrist_images.permute(0, 1, 4, 2, 3)
+            for view_id in range(wrist_images.shape[1]):
+                views.append(wrist_images[:, view_id])
+
+        while len(views) < self.config.non_dsrl_num_images:
+            views.append(views[-1].clone())
+        views = views[: self.config.non_dsrl_num_images]
+
+        processed_views = []
+        for image in views:
+            if image.dtype == torch.uint8:
+                image = image.float() / 255.0
+            elif image.min() < 0:
+                image = (image + 1.0) / 2.0
+            image = image.clamp(0.0, 1.0)
+            image = F.interpolate(
+                image,
+                size=(
+                    self.config.non_dsrl_image_size,
+                    self.config.non_dsrl_image_size,
+                ),
+                mode="bilinear",
+                align_corners=False,
+            )
+            image = image * 2.0 - 1.0
+            processed_views.append(image)
+        return torch.stack(processed_views, dim=1)
+
+    def _preprocess_non_dsrl_states(self, states):
+        """Flatten states for non-DSRL SAC side branch."""
+        if states.dim() > 2:
+            states = states.reshape(states.shape[0], -1)
+        return states
+
+    def _encode_non_dsrl_actor_features(self, obs):
+        """Encode non-DSRL SAC actor inputs into a compact feature vector."""
+        obs = self._normalize_sac_obs(obs)
+        images = self._stack_non_dsrl_images(
+            obs["main_images"], self._select_wrist_source(obs)
+        )
+        states = self._preprocess_non_dsrl_states(obs["states"])
+
+        device = next(self.actor_image_encoder.parameters()).device
+        images = images.to(device=device, dtype=torch.bfloat16)
+        states = states.to(device=device, dtype=torch.bfloat16)
+        image_features = self.actor_image_encoder(images)
+        state_features = self.actor_state_encoder(states)
+        return torch.cat([state_features, image_features], dim=-1)
+
+    def _encode_non_dsrl_critic_features(self, obs, detach_encoder=False):
+        """Encode non-DSRL SAC critic inputs."""
+        obs = self._normalize_sac_obs(obs)
+        images = self._stack_non_dsrl_images(
+            obs["main_images"], self._select_wrist_source(obs)
+        )
+        states = self._preprocess_non_dsrl_states(obs["states"])
+
+        device = next(self.critic_image_encoder.parameters()).device
+        images = images.to(device=device, dtype=torch.bfloat16)
+        states = states.to(device=device, dtype=torch.bfloat16)
+        image_features = self.critic_image_encoder(images)
+        state_features = self.critic_state_encoder(states)
+        if detach_encoder:
+            image_features = image_features.detach()
+            state_features = state_features.detach()
+        return state_features, image_features
+
+    def _sac_forward_non_dsrl(
+        self, obs=None, data=None, train=False, return_dist_params=False, **kwargs
+    ):
+        """SAC forward path for env-action PI05 offline RL."""
+        obs = self._normalize_sac_obs(obs, data=data, kwargs=kwargs or {})
+        features = self._encode_non_dsrl_actor_features(obs)
+        trunk_input = features.to(dtype=self.actor_trunk[0].weight.dtype)
+        trunk_features = self.actor_trunk(trunk_input)
+
+        action_mean = self.actor_mean(trunk_features).float()
+        action_logstd = self.actor_logstd(trunk_features).float()
+        action_logstd = torch.tanh(action_logstd)
+        logstd_low, logstd_high = self.config.non_dsrl_logstd_range
+        action_logstd = logstd_low + 0.5 * (logstd_high - logstd_low) * (
+            action_logstd + 1.0
+        )
+        action_std = torch.exp(action_logstd)
+
+        mode = kwargs.get("mode", "train")
+        deterministic = mode == "eval"
+        probs = torch.distributions.Normal(action_mean, action_std)
+        raw_action = action_mean if deterministic else probs.rsample()
+        chunk_logprobs = probs.log_prob(raw_action)
+
+        action = raw_action.reshape(
+            -1, self.config.action_horizon, self.config.action_env_dim
+        )
+        if return_dist_params:
+            return action, chunk_logprobs, (action_mean, action_std)
+        return action, chunk_logprobs, trunk_features.float()
+
+    def _sac_q_forward_non_dsrl(
+        self,
+        obs=None,
+        data=None,
+        actions=None,
+        detach_encoder=False,
+        train=False,
+        **kwargs,
+    ):
+        """Q-value forward path for env-action PI05 offline RL."""
+        obs = self._normalize_sac_obs(obs, data=data, kwargs=kwargs or {})
+        if actions is None:
+            raise ValueError("actions are required for non-DSRL sac_q_forward")
+        state_features, image_features = self._encode_non_dsrl_critic_features(
+            obs, detach_encoder=detach_encoder
+        )
+
+        if actions.dim() == 3:
+            actions = actions.reshape(actions.shape[0], -1)
+        elif actions.dim() > 3:
+            actions = actions.reshape(actions.shape[0], -1)
+
+        q_device = next(self.q_head.parameters()).device
+        actions = actions.to(device=q_device, dtype=torch.bfloat16)
+        state_features = state_features.to(device=q_device, dtype=torch.bfloat16)
+        image_features = image_features.to(device=q_device, dtype=torch.bfloat16)
+        q_values = self.q_head(state_features, image_features, actions)
         return q_values
 
     def _preprocess_dsrl_images(self, images, train=False):

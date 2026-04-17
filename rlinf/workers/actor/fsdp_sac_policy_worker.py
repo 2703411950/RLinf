@@ -106,9 +106,12 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             self.target_model.requires_grad_(False)
             self.target_model_initialized = True
 
-        self.use_dsrl = self.cfg.actor.model.get("openpi", {}).get("use_dsrl", False)
+        openpi_cfg = self.cfg.actor.model.get("openpi", {})
+        self.use_dsrl = openpi_cfg.get("use_dsrl", False)
+        self.use_non_dsrl_sac = openpi_cfg.get("use_non_dsrl_sac", False)
         use_dsrl = self.use_dsrl
-        if use_dsrl:
+        use_non_dsrl_sac = self.use_non_dsrl_sac
+        if use_dsrl or use_non_dsrl_sac:
             # DSRL: separate actor/critic encoders into different optimizer groups
             param_filters = {
                 "critic": ["critic_image_encoder", "critic_state_encoder", "q_head"]
