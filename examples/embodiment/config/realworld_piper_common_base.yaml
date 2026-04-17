@@ -1,0 +1,45 @@
+# Piper 真机公共基座：只放“机器人/任务本身”的共享常量，
+# 不放“采集模式”或“推理模式”的特有开关。
+#
+# 设计原则：
+# - 共享：任务目标、相机布局、基础 env 行为、logger 基础项
+# - 非共享：是否采集、是否策略推理、是否保存 demos、策略模型、chunk 执行参数、
+#   以及具体 cluster/can 拓扑
+
+defaults:
+  - env/realworld_piper_peg_insertion@env.eval
+  - override hydra/job_logging: stdout
+
+runner:
+  task_type: embodied
+  logger:
+    log_path: /data/cyy/RLinf/logs
+    project_name: rlinf
+    logger_backends: ["tensorboard"]
+  record_task_description: false
+  # 双臂 Piper: 左 7 维 + 右 7 维
+  action_dim: 14
+
+env:
+  group_name: "EnvGroup"
+  eval:
+    ignore_terminations: false
+    max_episode_steps: 1000
+    auto_reset: false
+    no_gripper: false
+    use_spacemouse: false
+    # camera_serials 第三路为顶视主相机。
+    main_image_key: "wrist_3"
+
+    override_cfg:
+      is_dummy: false
+      use_dense_reward: false
+      # target pos: left [-0.81526075  1.92523779 -1.55969603  0.06052802  1.12912331 -0.47656215]
+      #             right [ 0.02183407 -0.00123918 -0.50399873  0.          1.09001048 -0.01026254]
+      reset_joint_pose: [0.00925025, 0.00254818, -0.50740212, -0.04035201, 1.09226195, 0.06222099, 0.03588397, 0.00413643, -0.50949652, 0.01736603, 1.08695615, 0.05396558]
+      target_joint_pose: [-0.81526075, 1.92523779, -1.55969603, 0.06052802, 1.12912331, -0.47656215, 0, 0.02183407, -0.00123918, -0.50399873, 0, 1.09001048, -0.01026254, 0]
+      reward_threshold: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+      camera_serials: ["213622075557", "152122078363", "151222071331"]  # left, right, top
+      max_num_steps: 1000
+
+seed: 1234

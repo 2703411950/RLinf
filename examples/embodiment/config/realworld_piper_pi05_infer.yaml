@@ -19,12 +19,13 @@
 # 可调参数见 ``LeRobotPiperDataConfig``，经 ``actor.openpi_data`` 覆盖，例如：
 #   actor.openpi_data.override_use_quantile_norm=true
 #   actor.openpi_data.env_action_dim=7
-#
-# 下方 cluster 与 realworld_piper_pi05_5090.yaml 一致（5090d + Piper），覆盖 collect_data_base 的 piper_robot。
-# 若需 piper_robot 节点组，删除本文件的 cluster 块或整段命令行覆盖为 collect_data_base 中的 cluster。
+
+# 下方 cluster 与 realworld_piper_pi05_5090.yaml 一致（5090d + Piper）。
+# 本文件直接继承 realworld_piper_common_base，不再复用 collect_data_base，
+# 避免把“采集模式”的配置反复覆盖一遍。
 
 defaults:
-  - realworld_piper_collect_data_base
+  - realworld_piper_common_base
   - model/pi0_5@actor.model
   - _self_
 
